@@ -1,0 +1,57 @@
+seed: 42
+device: auto
+
+dataset:
+  root: data/visdrone
+  name: VisDrone2019-VID
+  fallback_name: VisDrone2019-MOT
+  split: official_val_or_custom
+  custom_val_ratio: 0.2
+  split_file: configs/visdrone_split.yaml
+
+model:
+  name: yolov8n
+  weights: yolov8n.pt
+  tracker: bytetrack.yaml
+  imgsz: 640
+  conf: 0.20
+  iou: 0.7
+  max_det: 300
+
+models:
+  - name: yolov8n
+    weights: yolov8n.pt
+  - name: yolov8s
+    weights: yolov8s.pt
+  - name: yolov8m
+    weights: yolov8m.pt
+
+fgsm:
+  enabled: true
+  loss: class_only
+  proxy_beta: 1.0
+  eps_values: [0.002, 0.004, 0.008, 0.016]
+  cache_dir: outputs/fgsm_cache
+
+filtering:
+  confidence_grid: [0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80]
+  tau_grid: [0.30, 0.40, 0.50, 0.60]
+  t_norms: [T_min, T_prod, T_Lukasiewicz]
+  alpha: auto
+  tie_eps: 0.01
+  s_feature_mode: neutral_single_camera
+
+xai:
+  enabled: false
+  method: gradcam
+  fallback_method: eigencam
+  c_low: 0.5
+  sigma_k: 0.3
+  max_per_frame: 5
+  examples_dir: outputs/xai_examples
+
+outputs:
+  results_dir: outputs/results
+  figures_dir: outputs/figures
+
+class_groups_file: configs/class_groups.yaml

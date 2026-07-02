@@ -1,0 +1,28 @@
+class_groups:
+  vru:
+    - pedestrian
+    - people
+    - bicycle
+    - tricycle
+    - awning-tricycle
+    - motor
+  vehicles:
+    - car
+    - van
+    - truck
+    - bus
+  all:
+    - pedestrian
+    - people
+    - bicycle
+    - car
+    - van
+    - truck
+    - tricycle
+    - awning-tricycle
+    - bus
+    - motor
+
+aliases:
+  person: pedestrian
+  motorcycle: motor
