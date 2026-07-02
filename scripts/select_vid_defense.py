@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -42,6 +44,9 @@ def main() -> None:
     p.add_argument("--tau-new-grid", nargs="+", type=float, default=None)
     p.add_argument("--risk-tau-grid", nargs="+", type=float, default=None)
     p.add_argument("--new-conf-tau-grid", nargs="+", type=float, default=None)
+    p.add_argument("--penalty-strengths", nargs="+", type=float, default=None)
+    p.add_argument("--min-penalties", nargs="+", type=float, default=None)
+    p.add_argument("--max-reject-per-frame", nargs="+", type=int, default=None)
     p.add_argument("--confirm-age", nargs="+", type=int, default=None)
     p.add_argument("--confirmed-conf-floors", nargs="+", type=float, default=None)
     p.add_argument("--tracking-top-k", type=int, default=12)
@@ -66,6 +71,9 @@ def main() -> None:
     tau_new_values = args.tau_new_grid or args.taus
     risk_tau_values = args.risk_tau_grid or cfg["filtering"].get("risk_tau_grid", [0.7])
     new_conf_tau_values = args.new_conf_tau_grid or cfg["filtering"].get("new_conf_tau_grid", [0.2])
+    penalty_strength_values = args.penalty_strengths or cfg["filtering"].get("penalty_strength_grid", [0.3])
+    min_penalty_values = args.min_penalties or cfg["filtering"].get("min_penalty_grid", [0.7])
+    max_reject_values = args.max_reject_per_frame or cfg["filtering"].get("max_reject_per_frame_grid", [1])
     confirm_age_values = args.confirm_age or cfg["filtering"].get("confirm_age_grid", [int(cfg["filtering"].get("confirm_age", 3))])
     confirmed_floors = args.confirmed_conf_floors or cfg["filtering"].get("confirmed_conf_floor_grid", [float(cfg["filtering"].get("confirmed_conf_floor", 0.03))])
     k_new_track = float(cfg["filtering"].get("k_new_track", 1.0))
@@ -81,6 +89,9 @@ def main() -> None:
                     for filter_mode in args.filter_modes:
                         floors = soft_floors if filter_mode == "soft_reweight" else [None]
                         patience_grid = patience_values if filter_mode in {"delayed_hard_filter", "track_aware", "new_track_suppression"} else [1]
+                        mode_penalties = penalty_strength_values if filter_mode == "suspicious_soft_penalty" else [penalty_strength_values[0]]
+                        mode_min_penalties = min_penalty_values if filter_mode == "suspicious_soft_penalty" else [min_penalty_values[0]]
+                        mode_max_rejects = max_reject_values if filter_mode == "top_risk_only_suppression" else [max_reject_values[0]]
                         for soft_conf_floor in floors:
                             for reject_patience in patience_grid:
                                 for beta in betas:
@@ -90,94 +101,107 @@ def main() -> None:
                                                 continue
                                             for risk_tau in risk_tau_values:
                                                 for new_conf_tau in new_conf_tau_values:
-                                                    for confirm_age in confirm_age_values:
-                                                        for confirmed_conf_floor in confirmed_floors:
-                                                            tau = tau_existing
-                                                            spec_key = (
-                                                                t_norm,
-                                                                tau,
-                                                                k_variant,
-                                                                alpha_scale,
-                                                                gamma_assoc,
-                                                                filter_mode,
-                                                                soft_conf_floor,
-                                                                reject_patience,
-                                                                beta,
-                                                                tau_existing,
-                                                                tau_new,
-                                                                confirm_age,
-                                                                confirmed_conf_floor,
-                                                                risk_tau,
-                                                                new_conf_tau,
-                                                            )
-                                                            common = dict(
-                                                                mode=filter_mode,
-                                                                k_variant=k_variant,
-                                                                alpha_scale=alpha_scale,
-                                                                beta=beta,
-                                                                preassociation=True,
-                                                                gamma_assoc=gamma_assoc,
-                                                                k_new_track=k_new_track,
-                                                                tau_soft_update=tau_soft_update,
-                                                                max_missed_frames=max_missed_frames,
-                                                                soft_conf_floor=float(soft_conf_floor or 0.0),
-                                                                reject_patience=reject_patience,
-                                                                tau_existing=tau_existing,
-                                                                tau_new=tau_new,
-                                                                confirm_age=confirm_age,
-                                                                max_confirm_missed=int(cfg["filtering"].get("max_confirm_missed", 1)),
-                                                                confirmed_conf_floor=float(confirmed_conf_floor),
-                                                                risk_tau=float(risk_tau),
-                                                                new_conf_tau=float(new_conf_tau),
-                                                                risk_weights=tuple(cfg["filtering"].get("risk_weights", [0.4, 0.3, 0.3])),
-                                                            )
-                                                            clean = apply_tnorm(s0, t_norm, tau, **common)
-                                                            attack = apply_tnorm(s1, t_norm, tau, **common)
-                                                            frames[spec_key] = (clean, attack)
-                                                            cm = evaluate(gt, clean, "S2_clean", 0.0, t_norm, tau, cfg=cfg, include_map=False, include_tracking=False)
-                                                            am = evaluate(gt, attack, "S2", args.eps, t_norm, tau, cfg=cfg, include_map=False, include_tracking=False)
-                                                            br = attack_success_breakdown(gt, s0, attack)
-                                                            asr = br["asr_total"]
-                                                            clean_drop = clean_base["F1"] - cm["F1"]
-                                                            recall_drop = s1_base["recall"] - am["recall"]
-                                                            fn_rate = am["FN"] / max(1, am["TP"] + am["FN"])
-                                                            robust_score = 0.50 * am["F1"] - 0.25 * asr - 0.15 * fn_rate - 0.10 * clean_drop
-                                                            rows.append(
-                                                                {
-                                                                    "model_name": args.model,
-                                                                    "eps": args.eps,
-                                                                    "t_norm": t_norm,
-                                                                    "tau_Q": tau,
-                                                                    "tau_existing": tau_existing,
-                                                                    "tau_new": tau_new,
-                                                                    "risk_tau": risk_tau,
-                                                                    "new_conf_tau": new_conf_tau,
-                                                                    "confirm_age": confirm_age,
-                                                                    "confirmed_conf_floor": confirmed_conf_floor,
-                                                                    "k_variant": k_variant,
-                                                                    "alpha_scale": alpha_scale,
-                                                                    "gamma_assoc": gamma_assoc,
-                                                                    "filter_mode": filter_mode,
-                                                                    "soft_conf_floor": soft_conf_floor,
-                                                                    "reject_patience": reject_patience,
-                                                                    "beta": beta,
-                                                                    "clean_F1": cm["F1"],
-                                                                    "attack_F1": am["F1"],
-                                                                    "attack_IDF1": None,
-                                                                    "attack_ASR": asr,
-                                                                    "FN_rate_attack": fn_rate,
-                                                                    "recall_drop_vs_S1": recall_drop,
-                                                                    "clean_drop": clean_drop,
-                                                                    "rejection_rate": am["rejection_rate"],
-                                                                    "robust_score": robust_score,
-                                                                    "passes_clean_constraint": clean_drop <= clean_limit,
-                                                                    "passes_clean_fallback": clean_drop <= clean_fallback,
-                                                                    "passes_recall_constraint": recall_drop <= recall_limit,
-                                                                    "passes_rejection_constraint": am["rejection_rate"] >= min_rejection,
-                                                                    "reason": "",
-                                                                    "selected": False,
-                                                                }
-                                                            )
+                                                    for penalty_strength in mode_penalties:
+                                                        for min_penalty in mode_min_penalties:
+                                                            for max_reject_per_frame in mode_max_rejects:
+                                                                for confirm_age in confirm_age_values:
+                                                                    for confirmed_conf_floor in confirmed_floors:
+                                                                        tau = tau_existing
+                                                                        spec_key = (
+                                                                            t_norm,
+                                                                            tau,
+                                                                            k_variant,
+                                                                            alpha_scale,
+                                                                            gamma_assoc,
+                                                                            filter_mode,
+                                                                            soft_conf_floor,
+                                                                            reject_patience,
+                                                                            beta,
+                                                                            tau_existing,
+                                                                            tau_new,
+                                                                            confirm_age,
+                                                                            confirmed_conf_floor,
+                                                                            risk_tau,
+                                                                            new_conf_tau,
+                                                                            penalty_strength,
+                                                                            min_penalty,
+                                                                            max_reject_per_frame,
+                                                                        )
+                                                                        common = dict(
+                                                                            mode=filter_mode,
+                                                                            k_variant=k_variant,
+                                                                            alpha_scale=alpha_scale,
+                                                                            beta=beta,
+                                                                            preassociation=True,
+                                                                            gamma_assoc=gamma_assoc,
+                                                                            k_new_track=k_new_track,
+                                                                            tau_soft_update=tau_soft_update,
+                                                                            max_missed_frames=max_missed_frames,
+                                                                            soft_conf_floor=float(soft_conf_floor or 0.0),
+                                                                            reject_patience=reject_patience,
+                                                                            tau_existing=tau_existing,
+                                                                            tau_new=tau_new,
+                                                                            confirm_age=confirm_age,
+                                                                            max_confirm_missed=int(cfg["filtering"].get("max_confirm_missed", 1)),
+                                                                            confirmed_conf_floor=float(confirmed_conf_floor),
+                                                                            risk_tau=float(risk_tau),
+                                                                            new_conf_tau=float(new_conf_tau),
+                                                                            risk_weights=tuple(cfg["filtering"].get("risk_weights", [0.4, 0.3, 0.3])),
+                                                                            penalty_strength=float(penalty_strength),
+                                                                            min_penalty=float(min_penalty),
+                                                                            max_reject_per_frame=int(max_reject_per_frame),
+                                                                        )
+                                                                        clean = apply_tnorm(s0, t_norm, tau, **common)
+                                                                        attack = apply_tnorm(s1, t_norm, tau, **common)
+                                                                        frames[spec_key] = (clean, attack)
+                                                                        cm = evaluate(gt, clean, "S2_clean", 0.0, t_norm, tau, cfg=cfg, include_map=False, include_tracking=False)
+                                                                        am = evaluate(gt, attack, "S2", args.eps, t_norm, tau, cfg=cfg, include_map=False, include_tracking=False)
+                                                                        br = attack_success_breakdown(gt, s0, attack)
+                                                                        asr = br["asr_total"]
+                                                                        clean_drop = clean_base["F1"] - cm["F1"]
+                                                                        recall_drop = s1_base["recall"] - am["recall"]
+                                                                        fn_rate = am["FN"] / max(1, am["TP"] + am["FN"])
+                                                                        robust_score = 0.50 * am["F1"] - 0.25 * asr - 0.15 * fn_rate - 0.10 * clean_drop
+                                                                        rows.append(
+                                                                            {
+                                                                                "model_name": args.model,
+                                                                                "eps": args.eps,
+                                                                                "t_norm": t_norm,
+                                                                                "tau_Q": tau,
+                                                                                "tau_existing": tau_existing,
+                                                                                "tau_new": tau_new,
+                                                                                "risk_tau": risk_tau,
+                                                                                "new_conf_tau": new_conf_tau,
+                                                                                "penalty_strength": penalty_strength,
+                                                                                "min_penalty": min_penalty,
+                                                                                "max_reject_per_frame": max_reject_per_frame,
+                                                                                "confirm_age": confirm_age,
+                                                                                "confirmed_conf_floor": confirmed_conf_floor,
+                                                                                "k_variant": k_variant,
+                                                                                "alpha_scale": alpha_scale,
+                                                                                "gamma_assoc": gamma_assoc,
+                                                                                "filter_mode": filter_mode,
+                                                                                "soft_conf_floor": soft_conf_floor,
+                                                                                "reject_patience": reject_patience,
+                                                                                "beta": beta,
+                                                                                "clean_F1": cm["F1"],
+                                                                                "attack_F1": am["F1"],
+                                                                                "attack_IDF1": None,
+                                                                                "attack_ASR": asr,
+                                                                                "FN_rate_attack": fn_rate,
+                                                                                "recall_drop_vs_S1": recall_drop,
+                                                                                "clean_drop": clean_drop,
+                                                                                "rejection_rate": am["rejection_rate"],
+                                                                                "soft_penalty_mean": soft_penalty_mean(attack),
+                                                                                "robust_score": robust_score,
+                                                                                "passes_clean_constraint": clean_drop <= clean_limit,
+                                                                                "passes_clean_fallback": clean_drop <= clean_fallback,
+                                                                                "passes_recall_constraint": recall_drop <= recall_limit,
+                                                                                "passes_rejection_constraint": am["rejection_rate"] >= min_rejection,
+                                                                                "reason": "",
+                                                                                "selected": False,
+                                                                            }
+                                                                        )
     eligible = [r for r in rows if r["passes_clean_constraint"] and r["passes_rejection_constraint"] and r["passes_recall_constraint"]]
     fallback = [r for r in rows if r["passes_clean_fallback"] and r["passes_rejection_constraint"] and r["passes_recall_constraint"]]
     if eligible:
@@ -229,6 +253,9 @@ def main() -> None:
                     "tau_new": float(best.get("tau_new", best["tau_Q"])),
                     "risk_tau": float(best.get("risk_tau", cfg["filtering"].get("risk_tau_grid", [0.7])[0])),
                     "new_conf_tau": float(best.get("new_conf_tau", cfg["filtering"].get("new_conf_tau_grid", [0.2])[0])),
+                    "penalty_strength": float(best.get("penalty_strength", cfg["filtering"].get("penalty_strength_grid", [0.3])[0])),
+                    "min_penalty": float(best.get("min_penalty", cfg["filtering"].get("min_penalty_grid", [0.7])[0])),
+                    "max_reject_per_frame": int(best.get("max_reject_per_frame", cfg["filtering"].get("max_reject_per_frame_grid", [1])[0])),
                     "filter_mode": best["filter_mode"],
                     "confirm_age": int(best.get("confirm_age", cfg["filtering"].get("confirm_age", 3))),
                     "confirmed_conf_floor": float(best.get("confirmed_conf_floor", cfg["filtering"].get("confirmed_conf_floor", 0.03))),
@@ -238,9 +265,26 @@ def main() -> None:
                 }
             }
         },
+        "holdout_allowed": selection_status == "selected",
     }
     with open(results / "selected_defense_params.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump(payload, f, sort_keys=False)
+    with open(results / "metadata.json", "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "stage": "v1.4",
+                "model": args.model,
+                "eps": args.eps,
+                "split": args.split,
+                "holdout_run": False,
+                "holdout_allowed": payload["holdout_allowed"],
+                "selection_status": selection_status,
+                "filter_modes": args.filter_modes,
+            },
+            f,
+            indent=2,
+        )
+        f.write("\n")
     selected_clean, selected_attack = frames[_frame_key(best)]
     sample = selected_attack.head(200)
     save(selected_attack, results / f"vid_{args.model}_s2_selected_eps_{args.eps}.csv")
@@ -269,6 +313,12 @@ def main() -> None:
     save(rejection_truth_summary(truth_audit), results / "rejection_truth_summary.csv")
     save(status_transition_summary(gt, args.model, args.eps, selected_attack, cfg), results / "status_transition_summary.csv")
     save(oracle_new_fp_filter_summary(gt, s0, s1, selected_attack, args.model, args.eps, cfg), results / "oracle_new_fp_filter_summary.csv")
+    s1_scored = baseline_scored_s1(s1, best, cfg)
+    labeled = label_tp_fp(gt, s1_scored)
+    save(oracle_fp_only_from_s1_summary(gt, s1, s1_scored, selected_attack, args.model, args.eps, cfg), results / "oracle_fp_only_from_s1_summary.csv")
+    save(oracle_by_status_summary(gt, s1, s1_scored, args.model, args.eps, cfg), results / "oracle_by_status_summary.csv")
+    save(tp_fp_feature_separation(labeled), results / "tp_fp_feature_separation.csv")
+    save(suspicious_score_auc(labeled), results / "suspicious_score_auc.csv")
     keep = [
         "sequence_id",
         "frame_id",
@@ -446,6 +496,178 @@ def fp_source_summary(gt: pd.DataFrame, model: str, eps: float, frame: pd.DataFr
     )
 
 
+def soft_penalty_mean(frame: pd.DataFrame) -> float:
+    if "penalty" not in frame:
+        return 0.0
+    penalty = pd.to_numeric(frame["penalty"], errors="coerce").fillna(1.0)
+    return float((1.0 - penalty).clip(lower=0.0).mean())
+
+
+def baseline_scored_s1(s1: pd.DataFrame, best: dict, cfg: dict) -> pd.DataFrame:
+    return apply_tnorm(
+        s1,
+        best.get("t_norm", "T_min"),
+        float(best.get("tau_Q", 0.1)),
+        mode="suspicious_label_only",
+        k_variant=best.get("k_variant", "robust_min"),
+        alpha_scale=float(best.get("alpha_scale", 0.3)),
+        beta=None if pd.isna(best.get("beta")) else best.get("beta"),
+        preassociation=True,
+        gamma_assoc=float(best.get("gamma_assoc", cfg["filtering"].get("gamma_assoc", 0.05))),
+        k_new_track=float(cfg["filtering"].get("k_new_track", 1.0)),
+        tau_soft_update=float(cfg["filtering"].get("tau_soft_update", 0.05)),
+        tau_existing=float(best.get("tau_existing", best.get("tau_Q", 0.1))),
+        tau_new=float(best.get("tau_new", best.get("tau_Q", 0.1))),
+        confirm_age=int(best.get("confirm_age", cfg["filtering"].get("confirm_age", 3))),
+        max_confirm_missed=int(cfg["filtering"].get("max_confirm_missed", 1)),
+        confirmed_conf_floor=float(best.get("confirmed_conf_floor", cfg["filtering"].get("confirmed_conf_floor", 0.03))),
+        reject_patience=int(best.get("reject_patience", cfg["filtering"].get("reject_patience", 1))),
+        risk_tau=float(best.get("risk_tau", cfg["filtering"].get("risk_tau_grid", [0.85])[0])),
+        new_conf_tau=float(best.get("new_conf_tau", cfg["filtering"].get("new_conf_tau_grid", [0.2])[0])),
+        risk_weights=tuple(cfg["filtering"].get("risk_weights", [0.4, 0.3, 0.3])),
+        penalty_strength=float(best.get("penalty_strength", cfg["filtering"].get("penalty_strength_grid", [0.3])[0])),
+        min_penalty=float(best.get("min_penalty", cfg["filtering"].get("min_penalty_grid", [0.7])[0])),
+        max_reject_per_frame=int(best.get("max_reject_per_frame", cfg["filtering"].get("max_reject_per_frame_grid", [1])[0])),
+    )
+
+
+def label_tp_fp(gt: pd.DataFrame, frame: pd.DataFrame) -> pd.DataFrame:
+    out = frame.copy()
+    pred_frames = {k: v for k, v in out.groupby(["sequence_id", "frame_id"])} if len(out) else {}
+    labels = {}
+    for (seq, frame_id), gt_f in gt.groupby(["sequence_id", "frame_id"]):
+        pred_f = pred_frames.get((seq, frame_id), out.iloc[0:0])
+        _, _, _, pairs = match_frame(gt_f, pred_f.assign(accepted=True))
+        for _, pi in pairs:
+            labels[pi] = True
+    out["is_TP"] = [bool(labels.get(idx, False)) for idx in out.index]
+    out["is_FP"] = ~out["is_TP"]
+    out["bbox_area"] = (out["x2"].astype(float) - out["x1"].astype(float)).clip(lower=0) * (out["y2"].astype(float) - out["y1"].astype(float)).clip(lower=0)
+    return out
+
+
+def oracle_fp_only_from_s1_summary(gt: pd.DataFrame, s1: pd.DataFrame, s1_scored: pd.DataFrame, s2: pd.DataFrame, model: str, eps: float, cfg: dict) -> pd.DataFrame:
+    labeled = label_tp_fp(gt, s1_scored)
+    oracle = labeled.copy()
+    oracle["accepted"] = ~oracle["is_FP"]
+    rows = []
+    for scenario, df in [("S1", s1), ("S2_best_real", s2), ("oracle_fp_only_from_s1", oracle)]:
+        m = evaluate(gt, df, scenario, eps, cfg=cfg, include_map=False, include_tracking=True)
+        frames = max(1, len(gt[["sequence_id", "frame_id"]].drop_duplicates()))
+        m["failure_intensity"] = (m["FP"] + m["FN"] + (m["IDSW"] or 0) + (m["track_breaks"] or 0)) / frames * 100.0
+        rows.append(m)
+    return pd.DataFrame(rows)
+
+
+def oracle_by_status_summary(gt: pd.DataFrame, s1: pd.DataFrame, s1_scored: pd.DataFrame, model: str, eps: float, cfg: dict) -> pd.DataFrame:
+    base = evaluate(gt, s1, "S1", eps, cfg=cfg, include_map=False, include_tracking=True)
+    labeled = label_tp_fp(gt, s1_scored)
+    modes = [
+        ("oracle_fp_new_candidate_only", "new_candidate"),
+        ("oracle_fp_tentative_only", "tentative_existing"),
+        ("oracle_fp_confirmed_only", "confirmed_existing"),
+        ("oracle_fp_unmatched_only", "unmatched_detection"),
+        ("oracle_fp_all_statuses", None),
+    ]
+    rows = []
+    for mode, status in modes:
+        oracle = labeled.copy()
+        target = oracle["is_FP"] if status is None else (oracle["is_FP"] & (oracle["track_status"] == status))
+        oracle["accepted"] = ~target
+        m = evaluate(gt, oracle, mode, eps, cfg=cfg, include_map=False, include_tracking=True)
+        m["oracle_mode"] = mode
+        m["track_status_target"] = status or "all"
+        m["FP_removed"] = int(base["FP"] - m["FP"])
+        m["IDSW_delta_vs_S1"] = None if m["IDSW"] is None else m["IDSW"] - base["IDSW"]
+        m["track_break_delta_vs_S1"] = None if m["track_breaks"] is None else m["track_breaks"] - base["track_breaks"]
+        rows.append(m)
+    return pd.DataFrame(rows)
+
+
+def tp_fp_feature_separation(labeled: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    features = ["confidence_original", "k_i", "Q_i", "assoc_score", "bbox_area"]
+    labeled = labeled.copy()
+    if "confidence_original" not in labeled:
+        labeled["confidence_original"] = labeled["confidence"]
+    for (status, is_tp), group in labeled.groupby(["track_status", "is_TP"], dropna=False):
+        row = {"track_status": status, "label": "TP" if is_tp else "FP", "count": len(group)}
+        for feat in features:
+            vals = pd.to_numeric(group[feat], errors="coerce").dropna() if feat in group else pd.Series(dtype=float)
+            short = "confidence" if feat == "confidence_original" else feat
+            row[f"{short}_mean"] = float(vals.mean()) if len(vals) else None
+            row[f"{short}_median"] = float(vals.median()) if len(vals) else None
+            row[f"{short}_p10"] = float(vals.quantile(0.10)) if len(vals) else None
+            row[f"{short}_p25"] = float(vals.quantile(0.25)) if len(vals) else None
+            row[f"{short}_p75"] = float(vals.quantile(0.75)) if len(vals) else None
+            row[f"{short}_p90"] = float(vals.quantile(0.90)) if len(vals) else None
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def suspicious_score_auc(labeled: pd.DataFrame) -> pd.DataFrame:
+    df = labeled.copy()
+    conf = pd.to_numeric(df.get("confidence_original", df["confidence"]), errors="coerce").fillna(0.0).clip(0, 1)
+    k = pd.to_numeric(df["k_i"], errors="coerce").fillna(1.0).clip(0, 1)
+    q = pd.to_numeric(df["Q_i"], errors="coerce").fillna(conf).clip(0, 1)
+    assoc = pd.to_numeric(df["assoc_score"], errors="coerce").fillna(0.0).clip(0, 1)
+    status_weight = df["track_status"].map({"confirmed_existing": 0.0, "tentative_existing": 0.1, "new_candidate": 0.2, "unmatched_detection": 0.3}).fillna(0.2)
+    scores = {
+        "score_conf": 1 - conf,
+        "score_k": 1 - k,
+        "score_Q": 1 - q,
+        "score_assoc": 1 - assoc,
+        "score_risk_old": 0.4 * (1 - conf) + 0.3 * (1 - k) + 0.3 * (1 - assoc),
+        "score_risk_conf_assoc": 0.6 * (1 - conf) + 0.4 * (1 - assoc),
+        "score_risk_conf_Q": 0.6 * (1 - conf) + 0.4 * (1 - q),
+        "score_risk_status_weighted": status_weight + 0.5 * (1 - conf) + 0.3 * (1 - q) + 0.2 * (1 - assoc),
+    }
+    rows = []
+    for name, score in scores.items():
+        tmp = df.assign(_score=score, _y=df["is_FP"].astype(int))
+        for status, g in list(tmp.groupby("track_status", dropna=False)) + [("all", tmp)]:
+            y = g["_y"].to_numpy(dtype=int)
+            s = g["_score"].to_numpy(dtype=float)
+            rows.append({"score_name": name, "track_status": status, **score_stats(y, s)})
+    return pd.DataFrame(rows)
+
+
+def score_stats(y: np.ndarray, score: np.ndarray) -> dict:
+    if len(y) == 0 or y.sum() == 0 or y.sum() == len(y):
+        return {
+            "roc_auc": None,
+            "average_precision": None,
+            "best_threshold": None,
+            "best_F1_for_FP_detection": None,
+            "precision_at_10pct_rejection": None,
+            "precision_at_5pct_rejection": None,
+        }
+    order = np.argsort(score)[::-1]
+    y_sorted = y[order]
+    s_sorted = score[order]
+    tp = np.cumsum(y_sorted)
+    fp = np.cumsum(1 - y_sorted)
+    precision = tp / np.maximum(1, tp + fp)
+    recall = tp / max(1, y.sum())
+    f1 = 2 * precision * recall / np.maximum(1e-12, precision + recall)
+    best_i = int(np.nanargmax(f1))
+    ap = float(np.sum((recall - np.r_[0, recall[:-1]]) * precision))
+    ranks = pd.Series(score).rank(method="average").to_numpy()
+    n_pos = y.sum()
+    n_neg = len(y) - n_pos
+    auc = float((ranks[y == 1].sum() - n_pos * (n_pos + 1) / 2) / max(1, n_pos * n_neg))
+    n10 = max(1, int(np.ceil(0.10 * len(y))))
+    n05 = max(1, int(np.ceil(0.05 * len(y))))
+    return {
+        "roc_auc": auc,
+        "average_precision": ap,
+        "best_threshold": float(s_sorted[best_i]),
+        "best_F1_for_FP_detection": float(f1[best_i]),
+        "precision_at_10pct_rejection": float(y_sorted[:n10].mean()),
+        "precision_at_5pct_rejection": float(y_sorted[:n05].mean()),
+    }
+
+
 def false_positive_rows(gt: pd.DataFrame, pred: pd.DataFrame) -> pd.DataFrame:
     rows = []
     pred_frames = {k: v for k, v in pred.groupby(["sequence_id", "frame_id"])} if len(pred) else {}
@@ -469,7 +691,9 @@ def rejection_truth_audit(gt: pd.DataFrame, model: str, eps: float, frame: pd.Da
         pred_to_gt = {pi: gi for gi, pi in pairs}
         for pi, det in pred_f.iterrows():
             is_rejected = bool(det.get("accepted") != True)
-            is_soft = float(det.get("confidence", det.get("confidence_original", 0.0))) < float(det.get("confidence_original", det.get("confidence", 0.0)))
+            conf_now = float(det.get("confidence", det.get("confidence_original", 0.0)))
+            conf_orig = float(det.get("confidence_original", det.get("confidence", 0.0)))
+            is_soft = conf_now < conf_orig
             is_suspicious = bool(det.get("suspicious") == True)
             if not (is_rejected or is_soft or is_suspicious):
                 continue
@@ -505,6 +729,10 @@ def rejection_truth_audit(gt: pd.DataFrame, model: str, eps: float, frame: pd.Da
                     "accepted_after": bool(det.get("accepted") == True),
                     "is_rejected": is_rejected,
                     "is_soft_downweighted": is_soft,
+                    "is_suspicious": is_suspicious,
+                    "suspicious_score": det.get("suspicious_score", det.get("risk_new")),
+                    "penalty": det.get("penalty"),
+                    "confidence_penalty": max(0.0, conf_orig - conf_now),
                     "matched_gt_iou": iou_val,
                     "is_true_positive_before_filter": is_tp,
                     "is_false_positive_before_filter": not is_tp,
@@ -515,15 +743,43 @@ def rejection_truth_audit(gt: pd.DataFrame, model: str, eps: float, frame: pd.Da
 
 
 def rejection_truth_summary(audit: pd.DataFrame) -> pd.DataFrame:
+    cols = [
+        "model_name",
+        "eps",
+        "filter_mode",
+        "k_variant",
+        "alpha_scale",
+        "gamma_assoc",
+        "tau_existing",
+        "tau_new",
+        "tau_Q",
+        "track_status",
+        "num_rejected",
+        "rejected_TP",
+        "rejected_FP",
+        "rejected_unknown",
+        "rejected_FP_rate",
+        "rejected_TP_rate",
+        "FP_removed_per_FN_created",
+        "num_suspicious",
+        "suspicious_TP",
+        "suspicious_FP",
+        "suspicious_FP_rate",
+        "suspicious_TP_rate",
+    ]
     if audit.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=cols)
     rows = []
     keys = ["model_name", "eps", "filter_mode", "k_variant", "alpha_scale", "gamma_assoc", "tau_existing", "tau_new", "tau_Q", "track_status"]
-    rejected = audit[audit["is_rejected"] == True]
-    for key, g in rejected.groupby(keys, dropna=False):
+    for key, g_all in audit.groupby(keys, dropna=False):
+        g = g_all[g_all["is_rejected"] == True]
+        suspicious = g_all[(g_all["is_rejected"] == True) | (g_all["is_soft_downweighted"] == True) | (g_all["is_suspicious"] == True)]
         num = len(g)
-        fp = int(g["is_false_positive_before_filter"].sum())
-        tp = int(g["is_true_positive_before_filter"].sum())
+        fp = int(g["is_false_positive_before_filter"].sum()) if num else 0
+        tp = int(g["is_true_positive_before_filter"].sum()) if num else 0
+        snum = len(suspicious)
+        sfp = int(suspicious["is_false_positive_before_filter"].sum()) if snum else 0
+        stp = int(suspicious["is_true_positive_before_filter"].sum()) if snum else 0
         rows.append(
             {
                 **dict(zip(keys, key)),
@@ -534,9 +790,14 @@ def rejection_truth_summary(audit: pd.DataFrame) -> pd.DataFrame:
                 "rejected_FP_rate": fp / max(1, num),
                 "rejected_TP_rate": tp / max(1, num),
                 "FP_removed_per_FN_created": fp / max(1, tp),
+                "num_suspicious": snum,
+                "suspicious_TP": stp,
+                "suspicious_FP": sfp,
+                "suspicious_FP_rate": sfp / max(1, snum),
+                "suspicious_TP_rate": stp / max(1, snum),
             }
         )
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=cols)
 
 
 def candidate_rejection_truth(gt: pd.DataFrame, table: pd.DataFrame, frames: dict) -> pd.DataFrame:
@@ -545,9 +806,15 @@ def candidate_rejection_truth(gt: pd.DataFrame, table: pd.DataFrame, frames: dic
         frame = frames[_frame_key(row)][1]
         audit = rejection_truth_audit(gt, row["model_name"], row["eps"], frame, {})
         rejected = audit[audit["is_rejected"] == True] if not audit.empty else audit
+        suspicious = audit[(audit["is_rejected"] == True) | (audit["is_soft_downweighted"] == True) | (audit.get("is_suspicious", False) == True)] if not audit.empty else audit
         num = len(rejected)
         fp = int(rejected["is_false_positive_before_filter"].sum()) if num else 0
         tp = int(rejected["is_true_positive_before_filter"].sum()) if num else 0
+        snum = len(suspicious)
+        sfp = int(suspicious["is_false_positive_before_filter"].sum()) if snum else 0
+        stp = int(suspicious["is_true_positive_before_filter"].sum()) if snum else 0
+        tp_pen = suspicious[suspicious["is_true_positive_before_filter"] == True]["confidence_penalty"].mean() if snum and "confidence_penalty" in suspicious else 0.0
+        fp_pen = suspicious[suspicious["is_false_positive_before_filter"] == True]["confidence_penalty"].mean() if snum and "confidence_penalty" in suspicious else 0.0
         rows.append(
             {
                 **{k: row.get(k) for k in _candidate_keys()},
@@ -557,6 +824,13 @@ def candidate_rejection_truth(gt: pd.DataFrame, table: pd.DataFrame, frames: dic
                 "rejected_FP_rate": fp / max(1, num),
                 "rejected_TP_rate": tp / max(1, num),
                 "FP_removed_per_FN_created": fp / max(1, tp),
+                "num_suspicious_truth": snum,
+                "suspicious_FP": sfp,
+                "suspicious_TP": stp,
+                "suspicious_FP_rate": sfp / max(1, snum),
+                "suspicious_TP_rate": stp / max(1, snum),
+                "TP_confidence_penalty_mean": 0.0 if pd.isna(tp_pen) else float(tp_pen),
+                "FP_confidence_penalty_mean": 0.0 if pd.isna(fp_pen) else float(fp_pen),
             }
         )
     return pd.DataFrame(rows)
@@ -652,6 +926,9 @@ def error_type_summary(gt: pd.DataFrame, s0: pd.DataFrame, s1: pd.DataFrame, mod
                 "tau_new": row.get("tau_new", row["tau_Q"]),
                 "risk_tau": row.get("risk_tau"),
                 "new_conf_tau": row.get("new_conf_tau"),
+                "penalty_strength": row.get("penalty_strength"),
+                "min_penalty": row.get("min_penalty"),
+                "max_reject_per_frame": row.get("max_reject_per_frame"),
                 "confirm_age": row.get("confirm_age"),
                 "confirmed_conf_floor": row.get("confirmed_conf_floor"),
                 "reject_patience": row.get("reject_patience"),
@@ -682,7 +959,19 @@ def error_type_summary(gt: pd.DataFrame, s0: pd.DataFrame, s1: pd.DataFrame, mod
 
 def finalize_tracking_selection(table: pd.DataFrame, err: pd.DataFrame, cfg: dict, gt: pd.DataFrame) -> tuple[pd.DataFrame, dict, str]:
     keys = ["t_norm", "k_variant", "alpha_scale", "gamma_assoc", "filter_mode", "tau_Q"]
-    for optional in ["tau_existing", "tau_new", "risk_tau", "new_conf_tau", "confirm_age", "confirmed_conf_floor", "reject_patience", "beta"]:
+    for optional in [
+        "tau_existing",
+        "tau_new",
+        "risk_tau",
+        "new_conf_tau",
+        "penalty_strength",
+        "min_penalty",
+        "max_reject_per_frame",
+        "confirm_age",
+        "confirmed_conf_floor",
+        "reject_patience",
+        "beta",
+    ]:
         if optional in table.columns and optional in err.columns:
             keys.append(optional)
     merged = table.merge(err, on=keys, how="left", suffixes=("", "_tracking"))
@@ -701,29 +990,31 @@ def finalize_tracking_selection(table: pd.DataFrame, err: pd.DataFrame, cfg: dic
         - 0.10 * (merged["track_breaks"].fillna(0) / frames)
         - 0.05 * merged["clean_drop"]
     )
+    hard_ok = (
+        (merged["rejection_rate"] > 0)
+        & (merged["rejected_FP_rate"].fillna(0) >= 0.50)
+        & (merged["FP_removed_per_FN_created"].fillna(0) >= 1.0)
+    )
+    soft_ok = (
+        (merged["soft_penalty_mean"].fillna(0) > 0)
+        & (merged["suspicious_FP_rate"].fillna(0) >= 0.50)
+        & (merged["TP_confidence_penalty_mean"].fillna(0) <= 0.15)
+        & (merged["FP_confidence_penalty_mean"].fillna(0) > merged["TP_confidence_penalty_mean"].fillna(0))
+    )
     strict = merged[
         (merged["clean_drop"] <= 0.02)
         & (merged["recall_drop_vs_S1"] <= 0.02)
         & (merged["delta_IDSW_vs_S1"] <= 0)
         & (merged["delta_track_breaks_vs_S1"] <= 0)
-        & (merged["rejection_rate"] >= float(cfg["filtering"].get("min_attack_rejection_rate", 0.005)))
-        & (merged["rejected_FP_rate"].fillna(0) >= 0.50)
-        & (merged["FP_removed_per_FN_created"].fillna(0) >= 1.0)
-        & (
-            (merged["delta_FP_vs_S1"] < 0)
-            | (merged["failure_intensity_delta_vs_S1"] < 0)
-            | (merged["delta_IDF1_vs_S1"] > 0)
-        )
+        & (merged["failure_intensity_delta_vs_S1"] <= 0)
+        & (hard_ok | soft_ok)
     ]
     fallback = merged[
         (merged["clean_drop"] <= 0.03)
         & (merged["recall_drop_vs_S1"] <= 0.03)
         & (merged["delta_IDSW_vs_S1"] <= 2)
         & (merged["delta_track_breaks_vs_S1"] <= 5)
-        & (merged["rejection_rate"] >= float(cfg["filtering"].get("min_attack_rejection_rate", 0.005)))
-        & (merged["rejected_FP_rate"].fillna(0) >= 0.50)
-        & (merged["FP_removed_per_FN_created"].fillna(0) >= 1.0)
-        & (merged["failure_intensity_delta_vs_S1"] <= 1.0)
+        & (hard_ok | soft_ok)
     ]
     if len(strict):
         status = "selected"
@@ -733,11 +1024,11 @@ def finalize_tracking_selection(table: pd.DataFrame, err: pd.DataFrame, cfg: dic
         best_row = fallback.sort_values("robust_score_v12", ascending=False).iloc[0]
     else:
         status = "not_selected"
-        non_noop = merged[merged["rejection_rate"] >= float(cfg["filtering"].get("min_attack_rejection_rate", 0.005))]
+        non_noop = merged[(merged["rejection_rate"] > 0) | (merged["soft_penalty_mean"].fillna(0) > 0)]
         if len(non_noop):
             best_row = non_noop.sort_values(
-                ["rejected_FP_rate", "FP_removed_per_FN_created", "rejection_rate", "robust_score_v12"],
-                ascending=[False, False, False, False],
+                ["suspicious_FP_rate", "rejected_FP_rate", "FP_removed_per_FN_created", "soft_penalty_mean", "rejection_rate", "robust_score_v12"],
+                ascending=[False, False, False, False, False, False],
             ).iloc[0]
         else:
             pool = merged.dropna(subset=["robust_score_v12"])
@@ -751,6 +1042,9 @@ def finalize_tracking_selection(table: pd.DataFrame, err: pd.DataFrame, cfg: dic
         if col in merged:
             out[col] = merged[col]
     for col in ["rejected_FP_rate", "rejected_TP_rate", "FP_removed_per_FN_created", "rejected_FP", "rejected_TP"]:
+        if col in merged:
+            out[col] = merged[col]
+    for col in ["soft_penalty_mean", "suspicious_FP_rate", "suspicious_TP_rate", "TP_confidence_penalty_mean", "FP_confidence_penalty_mean"]:
         if col in merged:
             out[col] = merged[col]
     best = best_row.to_dict()
@@ -778,6 +1072,9 @@ def _candidate_keys() -> list[str]:
         "tau_new",
         "risk_tau",
         "new_conf_tau",
+        "penalty_strength",
+        "min_penalty",
+        "max_reject_per_frame",
         "confirm_age",
         "confirmed_conf_floor",
         "k_variant",
@@ -812,6 +1109,9 @@ def error_intensity_summary(error_df: pd.DataFrame, gt: pd.DataFrame) -> pd.Data
         "tau_new",
         "risk_tau",
         "new_conf_tau",
+        "penalty_strength",
+        "min_penalty",
+        "max_reject_per_frame",
         "confirm_age",
         "reject_patience",
         "FP_per_100_frames",
@@ -851,6 +1151,9 @@ def _frame_key(row: dict) -> tuple:
         row.get("confirmed_conf_floor"),
         row.get("risk_tau"),
         row.get("new_conf_tau"),
+        row.get("penalty_strength"),
+        row.get("min_penalty"),
+        row.get("max_reject_per_frame"),
     )
 
 

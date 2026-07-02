@@ -26,7 +26,20 @@ def main() -> None:
     p.add_argument("--fast-metrics", action="store_true")
     p.add_argument("--skip-ablation", action="store_true")
     p.add_argument("--class-agnostic-eval", choices=["true", "false"], default=None)
-    filter_choices = ["hard", "soft", "hard_filter", "soft_reweight", "delayed_hard_filter", "track_aware", "new_track_suppression", "risk_gated_new_suppression", "low_conf_new_suppression", "suspicious_label_only"]
+    filter_choices = [
+        "hard",
+        "soft",
+        "hard_filter",
+        "soft_reweight",
+        "delayed_hard_filter",
+        "track_aware",
+        "new_track_suppression",
+        "risk_gated_new_suppression",
+        "low_conf_new_suppression",
+        "suspicious_label_only",
+        "suspicious_soft_penalty",
+        "top_risk_only_suppression",
+    ]
     p.add_argument("--filter-mode", choices=filter_choices, default=None)
     p.add_argument("--filter-modes", nargs="+", choices=filter_choices, default=None)
     p.add_argument("--k-variants", nargs="+", choices=["center", "iou", "combined", "gate", "acc", "robust_min"], default=None)
@@ -37,6 +50,9 @@ def main() -> None:
     p.add_argument("--tau-new-grid", nargs="+", type=float, default=None)
     p.add_argument("--risk-tau-grid", nargs="+", type=float, default=None)
     p.add_argument("--new-conf-tau-grid", nargs="+", type=float, default=None)
+    p.add_argument("--penalty-strengths", nargs="+", type=float, default=None)
+    p.add_argument("--min-penalties", nargs="+", type=float, default=None)
+    p.add_argument("--max-reject-per-frame", nargs="+", type=int, default=None)
     p.add_argument("--confirm-age", nargs="+", type=int, default=None)
     p.add_argument("--soft-conf-floors", nargs="+", type=float, default=None)
     p.add_argument("--confirmed-conf-floors", nargs="+", type=float, default=None)
@@ -67,6 +83,12 @@ def main() -> None:
         cfg["filtering"]["risk_tau_grid"] = args.risk_tau_grid
     if args.new_conf_tau_grid:
         cfg["filtering"]["new_conf_tau_grid"] = args.new_conf_tau_grid
+    if args.penalty_strengths:
+        cfg["filtering"]["penalty_strength_grid"] = args.penalty_strengths
+    if args.min_penalties:
+        cfg["filtering"]["min_penalty_grid"] = args.min_penalties
+    if args.max_reject_per_frame:
+        cfg["filtering"]["max_reject_per_frame_grid"] = args.max_reject_per_frame
     if args.confirm_age:
         cfg["filtering"]["confirm_age_grid"] = args.confirm_age
     if args.gamma_assoc:

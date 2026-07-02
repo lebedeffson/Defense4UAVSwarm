@@ -65,6 +65,9 @@ def apply_tnorm(
     risk_tau: float = 0.7,
     new_conf_tau: float = 0.2,
     risk_weights: tuple[float, float, float] = (0.4, 0.3, 0.3),
+    penalty_strength: float = 0.3,
+    min_penalty: float = 0.7,
+    max_reject_per_frame: int = 1,
 ):
     if preassociation:
         return _apply_tnorm_preassociation(
@@ -89,6 +92,9 @@ def apply_tnorm(
             risk_tau=risk_tau,
             new_conf_tau=new_conf_tau,
             risk_weights=risk_weights,
+            penalty_strength=penalty_strength,
+            min_penalty=min_penalty,
+            max_reject_per_frame=max_reject_per_frame,
         )
 
     out = df.copy()
@@ -120,6 +126,9 @@ def apply_tnorm(
     out["confirm_age"] = confirm_age
     out["risk_tau"] = risk_tau
     out["new_conf_tau"] = new_conf_tau
+    out["penalty_strength"] = penalty_strength
+    out["min_penalty"] = min_penalty
+    out["max_reject_per_frame"] = max_reject_per_frame
     if "track_status" not in out:
         out["track_status"] = [
             _status_from_existing_row(r, int(confirm_age), int(max_confirm_missed))
@@ -161,6 +170,9 @@ def _apply_tnorm_preassociation(
     risk_tau: float,
     new_conf_tau: float,
     risk_weights: tuple[float, float, float],
+    penalty_strength: float,
+    min_penalty: float,
+    max_reject_per_frame: int,
 ) -> pd.DataFrame:
     out = df.copy()
     if out.empty:
@@ -197,8 +209,14 @@ def _apply_tnorm_preassociation(
         "suspicious",
         "filter_action",
         "risk_new",
+        "suspicious_score",
+        "penalty",
+        "rank_risk_in_frame",
         "risk_tau",
         "new_conf_tau",
+        "penalty_strength",
+        "min_penalty",
+        "max_reject_per_frame",
     ]:
         out[col] = None
     mode_label = "soft_reweight" if mode == "soft" else "delayed_hard_filter" if mode == "delayed" else mode
@@ -211,6 +229,9 @@ def _apply_tnorm_preassociation(
     out["confirm_age"] = confirm_age
     out["risk_tau"] = risk_tau
     out["new_conf_tau"] = new_conf_tau
+    out["penalty_strength"] = penalty_strength
+    out["min_penalty"] = min_penalty
+    out["max_reject_per_frame"] = max_reject_per_frame
     out["gamma_assoc"] = gamma_assoc
     out["soft_conf_floor"] = soft_conf_floor
     out["reject_patience"] = reject_patience
@@ -227,6 +248,7 @@ def _apply_tnorm_preassociation(
             if int(frame) - int(seq_states[tid].get("last_frame_id", frame)) > max_missed_frames:
                 del seq_states[tid]
         used_tracks: set[int] = set()
+        frame_reject_count = 0
         for idx, det in frame_df.iterrows():
             alpha_base = alpha_base_by_seq.get(seq, 50.0)
             alpha = max(1.0, alpha_scale * alpha_base)
@@ -292,6 +314,8 @@ def _apply_tnorm_preassociation(
             suspicious = q_smooth < (tau_existing if track_status in {"confirmed_existing", "tentative_existing"} else tau_new)
             filter_action = "keep"
             risk_new = _risk_new(float(det.confidence), k_i, assoc_score, risk_weights)
+            suspicious_score = risk_new
+            penalty = 1.0
             if mode == "risk_gated_new_suppression":
                 if track_status in {"confirmed_existing", "tentative_existing"}:
                     accepted = True
@@ -317,6 +341,32 @@ def _apply_tnorm_preassociation(
                 should_update = True
                 suspicious = bool(suspicious or (track_status in {"new_candidate", "unmatched_detection"} and risk_new >= float(risk_tau)))
                 filter_action = "label_suspicious" if suspicious else "keep"
+            elif mode == "suspicious_soft_penalty":
+                suspicious = bool(suspicious or risk_new >= float(risk_tau))
+                if track_status == "unmatched_detection" and risk_new >= float(risk_tau):
+                    accepted = False
+                    should_update = False
+                    filter_action = "reject_unmatched_high_risk"
+                else:
+                    penalty = max(float(min_penalty), 1.0 - float(penalty_strength) * suspicious_score)
+                    new_conf = float(det.confidence) * penalty
+                    out.at[idx, "confidence"] = new_conf
+                    out.at[idx, "c_i"] = new_conf
+                    accepted = True
+                    should_update = True
+                    filter_action = "soft_penalty" if penalty < 0.999 else "keep"
+            elif mode == "top_risk_only_suppression":
+                high_risk_new = track_status == "new_candidate" and risk_new >= float(risk_tau)
+                high_risk_unmatched = track_status == "unmatched_detection" and risk_new >= float(risk_tau)
+                can_reject = frame_reject_count < int(max_reject_per_frame)
+                accepted = not (can_reject and (high_risk_unmatched or high_risk_new))
+                should_update = accepted
+                suspicious = not accepted or suspicious
+                if accepted:
+                    filter_action = "keep"
+                else:
+                    frame_reject_count += 1
+                    filter_action = "reject_top_risk"
             elif mode == "track_aware":
                 if track_status == "confirmed_existing":
                     accepted = True
@@ -381,8 +431,14 @@ def _apply_tnorm_preassociation(
             out.at[idx, "Q_smooth"] = q_smooth
             out.at[idx, "Q_i"] = q_smooth
             out.at[idx, "risk_new"] = risk_new
+            out.at[idx, "suspicious_score"] = suspicious_score
+            out.at[idx, "penalty"] = penalty
+            out.at[idx, "rank_risk_in_frame"] = frame_reject_count if filter_action == "reject_top_risk" else None
             out.at[idx, "risk_tau"] = risk_tau
             out.at[idx, "new_conf_tau"] = new_conf_tau
+            out.at[idx, "penalty_strength"] = penalty_strength
+            out.at[idx, "min_penalty"] = min_penalty
+            out.at[idx, "max_reject_per_frame"] = max_reject_per_frame
             out.at[idx, "confidence_new"] = out.at[idx, "confidence"]
             out.at[idx, "low_Q_streak"] = low_q_streak
             out.at[idx, "suspicious"] = bool(suspicious)

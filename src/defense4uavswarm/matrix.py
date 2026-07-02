@@ -214,6 +214,9 @@ def run_experiment_matrix(
                         risk_tau=float(spec.get("risk_tau", mc["filtering"].get("risk_tau_grid", [0.7])[0])),
                         new_conf_tau=float(spec.get("new_conf_tau", mc["filtering"].get("new_conf_tau_grid", [0.2])[0])),
                         risk_weights=tuple(mc["filtering"].get("risk_weights", [0.4, 0.3, 0.3])),
+                        penalty_strength=float(spec.get("penalty_strength", mc["filtering"].get("penalty_strength_grid", [0.3])[0])),
+                        min_penalty=float(spec.get("min_penalty", mc["filtering"].get("min_penalty_grid", [0.7])[0])),
+                        max_reject_per_frame=int(spec.get("max_reject_per_frame", mc["filtering"].get("max_reject_per_frame_grid", [1])[0])),
                     )
                     for spec in s2_specs
                 }
@@ -313,7 +316,7 @@ def defense_specs_for_run(
         specs = []
         tau_existing_grid = cfg["filtering"].get("tau_existing_grid", cfg["filtering"].get("robust_tau_grid", cfg["filtering"]["tau_grid"]))
         tau_new_grid = cfg["filtering"].get("tau_new_grid", cfg["filtering"].get("robust_tau_grid", cfg["filtering"]["tau_grid"]))
-        for tnorm, kv, alpha, gamma, mode, beta, tau_existing, tau_new, risk_tau, new_conf_tau, confirm_age, floor, patience in product(
+        for tnorm, kv, alpha, gamma, mode, beta, tau_existing, tau_new, risk_tau, new_conf_tau, penalty_strength, min_penalty, max_reject, confirm_age, floor, patience in product(
             cfg["filtering"]["t_norms"],
             k_variants or cfg["filtering"].get("k_variants", ["center"]),
             alpha_scales or cfg["filtering"].get("alpha_scales", [1.0]),
@@ -324,11 +327,18 @@ def defense_specs_for_run(
             tau_new_grid,
             cfg["filtering"].get("risk_tau_grid", [0.7]),
             cfg["filtering"].get("new_conf_tau_grid", [0.2]),
+            cfg["filtering"].get("penalty_strength_grid", [0.3]),
+            cfg["filtering"].get("min_penalty_grid", [0.7]),
+            cfg["filtering"].get("max_reject_per_frame_grid", [1]),
             cfg["filtering"].get("confirm_age_grid", [cfg["filtering"].get("confirm_age", 3)]),
             cfg["filtering"].get("confirmed_conf_floor_grid", [cfg["filtering"].get("confirmed_conf_floor", 0.03)]),
             cfg["filtering"].get("reject_patience_grid", [cfg["filtering"].get("reject_patience", 1)]),
         ):
             if float(tau_new) < float(tau_existing):
+                continue
+            if mode != "suspicious_soft_penalty" and (float(penalty_strength) != float(cfg["filtering"].get("penalty_strength_grid", [0.3])[0]) or float(min_penalty) != float(cfg["filtering"].get("min_penalty_grid", [0.7])[0])):
+                continue
+            if mode != "top_risk_only_suppression" and int(max_reject) != int(cfg["filtering"].get("max_reject_per_frame_grid", [1])[0]):
                 continue
             specs.append(
                 {
@@ -339,6 +349,9 @@ def defense_specs_for_run(
                     "tau_new": float(tau_new),
                     "risk_tau": float(risk_tau),
                     "new_conf_tau": float(new_conf_tau),
+                    "penalty_strength": float(penalty_strength),
+                    "min_penalty": float(min_penalty),
+                    "max_reject_per_frame": int(max_reject),
                     "filter_mode": mode,
                     "k_variant": kv,
                     "alpha_scale": float(alpha),
@@ -367,6 +380,9 @@ def defense_specs_for_run(
             "confirm_age": int(cfg["filtering"].get("confirm_age", 3)),
             "risk_tau": float(cfg["filtering"].get("risk_tau_grid", [0.7])[0]),
             "new_conf_tau": float(cfg["filtering"].get("new_conf_tau_grid", [0.2])[0]),
+            "penalty_strength": float(cfg["filtering"].get("penalty_strength_grid", [0.3])[0]),
+            "min_penalty": float(cfg["filtering"].get("min_penalty_grid", [0.7])[0]),
+            "max_reject_per_frame": int(cfg["filtering"].get("max_reject_per_frame_grid", [1])[0]),
             "reject_patience": int(cfg["filtering"].get("reject_patience", 1)),
             "beta": None,
         }
@@ -392,6 +408,9 @@ def normalize_defense_spec(spec: dict, tau_q: dict[str, float]) -> dict:
         "confirm_age": int(spec.get("confirm_age", 3)),
         "risk_tau": float(spec.get("risk_tau", 0.7)),
         "new_conf_tau": float(spec.get("new_conf_tau", 0.2)),
+        "penalty_strength": float(spec.get("penalty_strength", 0.3)),
+        "min_penalty": float(spec.get("min_penalty", 0.7)),
+        "max_reject_per_frame": int(spec.get("max_reject_per_frame", 1)),
         "reject_patience": int(spec.get("reject_patience", 1)),
         "beta": spec.get("beta"),
     }
@@ -424,6 +443,9 @@ def select_robust_defense(gt, s0, s1, cfg, model_name: str, eps: float, specs: l
             risk_tau=float(spec.get("risk_tau", cfg["filtering"].get("risk_tau_grid", [0.7])[0])),
             new_conf_tau=float(spec.get("new_conf_tau", cfg["filtering"].get("new_conf_tau_grid", [0.2])[0])),
             risk_weights=tuple(cfg["filtering"].get("risk_weights", [0.4, 0.3, 0.3])),
+            penalty_strength=float(spec.get("penalty_strength", cfg["filtering"].get("penalty_strength_grid", [0.3])[0])),
+            min_penalty=float(spec.get("min_penalty", cfg["filtering"].get("min_penalty_grid", [0.7])[0])),
+            max_reject_per_frame=int(spec.get("max_reject_per_frame", cfg["filtering"].get("max_reject_per_frame_grid", [1])[0])),
         )
         attack = apply_tnorm(
             s1,
@@ -446,6 +468,9 @@ def select_robust_defense(gt, s0, s1, cfg, model_name: str, eps: float, specs: l
             risk_tau=float(spec.get("risk_tau", cfg["filtering"].get("risk_tau_grid", [0.7])[0])),
             new_conf_tau=float(spec.get("new_conf_tau", cfg["filtering"].get("new_conf_tau_grid", [0.2])[0])),
             risk_weights=tuple(cfg["filtering"].get("risk_weights", [0.4, 0.3, 0.3])),
+            penalty_strength=float(spec.get("penalty_strength", cfg["filtering"].get("penalty_strength_grid", [0.3])[0])),
+            min_penalty=float(spec.get("min_penalty", cfg["filtering"].get("min_penalty_grid", [0.7])[0])),
+            max_reject_per_frame=int(spec.get("max_reject_per_frame", cfg["filtering"].get("max_reject_per_frame_grid", [1])[0])),
         )
         cm = evaluate(gt, clean, "S2_clean", 0.0, spec["t_norm"], spec["tau_Q"], cfg=cfg, include_map=False, include_tracking=not fast_metrics)
         am = evaluate(gt, attack, "S2", eps, spec["t_norm"], spec["tau_Q"], cfg=cfg, include_map=False, include_tracking=not fast_metrics)
@@ -481,6 +506,9 @@ def select_robust_defense(gt, s0, s1, cfg, model_name: str, eps: float, specs: l
             "reject_patience": spec.get("reject_patience"),
             "risk_tau": spec.get("risk_tau"),
             "new_conf_tau": spec.get("new_conf_tau"),
+            "penalty_strength": spec.get("penalty_strength"),
+            "min_penalty": spec.get("min_penalty"),
+            "max_reject_per_frame": spec.get("max_reject_per_frame"),
             "clean_F1": cm["F1"],
             "attack_F1": am["F1"],
             "attack_IDF1": idf1,
@@ -501,7 +529,27 @@ def select_robust_defense(gt, s0, s1, cfg, model_name: str, eps: float, specs: l
     for row in rows:
         row["selected"] = bool(eligible) and all(row[k] == best[k] for k in ["k_variant", "alpha_scale", "beta", "filter_mode", "t_norm", "tau_Q", "tau_existing", "tau_new", "reject_patience"])
         row["reason"] = "" if row["selected"] else ("no_candidate_with_nonzero_rejection" if not eligible else "")
-    selected = {k: best[k] for k in ["k_variant", "alpha_scale", "beta", "filter_mode", "t_norm", "tau_Q", "tau_existing", "tau_new", "risk_tau", "new_conf_tau", "confirm_age", "confirmed_conf_floor", "reject_patience"]}
+    selected = {
+        k: best[k]
+        for k in [
+            "k_variant",
+            "alpha_scale",
+            "beta",
+            "filter_mode",
+            "t_norm",
+            "tau_Q",
+            "tau_existing",
+            "tau_new",
+            "risk_tau",
+            "new_conf_tau",
+            "penalty_strength",
+            "min_penalty",
+            "max_reject_per_frame",
+            "confirm_age",
+            "confirmed_conf_floor",
+            "reject_patience",
+        ]
+    }
     return rows, selected
 
 
