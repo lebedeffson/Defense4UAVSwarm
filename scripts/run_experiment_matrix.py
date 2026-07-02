@@ -5,6 +5,7 @@ import argparse
 
 from defense4uavswarm.config import load_config
 from defense4uavswarm.matrix import run_experiment_matrix
+from defense4uavswarm.semantic import build_semantic_diagnostics
 
 
 def main() -> None:
@@ -59,6 +60,11 @@ def main() -> None:
     p.add_argument("--reject-patience", nargs="+", type=int, default=None)
     p.add_argument("--betas", nargs="+", default=None, help="Temporal smoothing betas; use none to include no smoothing.")
     p.add_argument("--use-selected-defense", default=None)
+    p.add_argument("--semantic-diagnostics", action="store_true")
+    p.add_argument("--semantic-features", nargs="+", default=["margin", "augmentation", "temporal"])
+    p.add_argument("--augmentation-count", type=int, default=3)
+    p.add_argument("--semantic-max-frames", type=int, default=30)
+    p.add_argument("--xai-max-per-frame", type=int, default=3)
     args = p.parse_args()
     cfg = load_config(args.config)
     if args.fgsm_loss:
@@ -89,6 +95,7 @@ def main() -> None:
         cfg["filtering"]["min_penalty_grid"] = args.min_penalties
     if args.max_reject_per_frame:
         cfg["filtering"]["max_reject_per_frame_grid"] = args.max_reject_per_frame
+    cfg.setdefault("semantic", {})["augmentation_max_frames"] = args.semantic_max_frames
     if args.confirm_age:
         cfg["filtering"]["confirm_age_grid"] = args.confirm_age
     if args.gamma_assoc:
@@ -102,26 +109,50 @@ def main() -> None:
     betas = None
     if args.betas is not None:
         betas = [None if str(x).lower() in {"none", "null", "off"} else float(x) for x in args.betas]
-    run_experiment_matrix(
-        cfg,
-        model_names=args.models,
-        tasks=args.tasks,
-        eps_values=args.eps,
-        scenarios=args.scenarios,
-        class_groups=args.class_groups,
-        limit_sequences=args.limit_sequences,
-        limit_images=args.limit_images,
-        sequence_list=args.sequence_list,
-        fast_metrics=args.fast_metrics,
-        build_ablation=not args.skip_ablation,
-        split_config=args.split_config,
-        split=args.split,
-        k_variants=args.k_variants,
-        filter_modes=args.filter_modes,
-        alpha_scales=args.alpha_scales,
-        betas=betas,
-        use_selected_defense=args.use_selected_defense,
+    existing_semantic_inputs = (
+        args.semantic_diagnostics
+        and args.scenarios == ["s1"]
+        and all(
+            __import__("pathlib").Path(cfg["outputs"]["results_dir"]).joinpath(f"vid_{model_name}_s1_fgsm_eps_{eps}.csv").exists()
+            for model_name in args.models
+            for eps in args.eps
+        )
     )
+    if not existing_semantic_inputs:
+        run_experiment_matrix(
+            cfg,
+            model_names=args.models,
+            tasks=args.tasks,
+            eps_values=args.eps,
+            scenarios=args.scenarios,
+            class_groups=args.class_groups,
+            limit_sequences=args.limit_sequences,
+            limit_images=args.limit_images,
+            sequence_list=args.sequence_list,
+            fast_metrics=args.fast_metrics,
+            build_ablation=not args.skip_ablation,
+            split_config=args.split_config,
+            split=args.split,
+            k_variants=args.k_variants,
+            filter_modes=args.filter_modes,
+            alpha_scales=args.alpha_scales,
+            betas=betas,
+            use_selected_defense=args.use_selected_defense,
+        )
+    if args.semantic_diagnostics:
+        for model_name in args.models:
+            for eps in args.eps:
+                build_semantic_diagnostics(
+                    cfg,
+                    cfg["outputs"]["results_dir"],
+                    args.split_config,
+                    args.split,
+                    model_name,
+                    eps,
+                    args.semantic_features,
+                    augmentation_count=args.augmentation_count,
+                    xai_max_per_frame=args.xai_max_per_frame,
+                )
 
 
 if __name__ == "__main__":
