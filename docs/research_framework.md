@@ -284,3 +284,25 @@ outputs/figures/ablation_variants.png
 ```text
 clean baseline -> attack -> naive defense -> T-norm defense -> comparison by models/classes
 ```
+
+## 14. Audit Note
+
+Первые реальные прогоны на COCO-pretrained `yolov8n.pt/yolov8s.pt` показали ограничение постановки: baseline recall на VisDrone низкий даже в class-agnostic режиме. Это не доказывает слабость T-норм; это означает, что нужен detector, адаптированный к VisDrone, либо отдельный class-agnostic протокол.
+
+Corrected-протокол фиксирует:
+
+```text
+model.conf = 0.05
+prediction_class_filter = person,bicycle,car,motorcycle,bus,truck
+tau_Q grid = 0.05..0.50
+tracking metrics включены для class_group=all
+hard и soft filtering сравниваются отдельно
+```
+
+Оставшиеся ограничения:
+
+```text
+FGSM preprocessing пока resize-based, а Ultralytics inference использует letterbox
+COCO->VisDrone remap неполный
+fine-tune на VisDrone нужен для сильного baseline
+```

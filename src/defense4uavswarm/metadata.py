@@ -42,6 +42,10 @@ def write_metadata(path: str | Path, cfg: dict, extra: dict) -> None:
         "s_feature_mode": cfg["filtering"]["s_feature_mode"],
         "xai": cfg["xai"],
         "metrics_note": "mAP field is AP@0.5 in the minimal first pipeline",
+        "prediction_class_filter": cfg.get("evaluation", {}).get("prediction_class_filter"),
+        "prediction_class_filter_mode": cfg.get("evaluation", {}).get("prediction_class_filter_mode"),
+        "class_agnostic_eval": cfg.get("evaluation", {}).get("class_agnostic"),
+        "tnorm_filter_mode": cfg.get("filtering", {}).get("tnorm_filter_mode"),
         "commit": git_commit(),
     }
     payload.update(extra)

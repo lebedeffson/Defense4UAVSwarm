@@ -99,6 +99,15 @@ python scripts/run_pipeline.py --config configs/default.yaml --scenario s1 --eps
 
 Tie-break: при разнице F1 меньше `0.01` выбирается меньший порог.
 
+Важно: inference confidence в `configs/default.yaml` намеренно ниже сетки подбора:
+
+```yaml
+model:
+  conf: 0.05
+```
+
+Иначе `S_naive` вырождается в `S1`, если detector уже отрезал все ниже `0.20`.
+
 ## S2 T-нормы
 
 Реализованы:
@@ -112,10 +121,18 @@ T_Lukasiewicz
 `tau_Q*` выбирается на S0-val отдельно для каждой T-нормы из:
 
 ```text
-0.30, 0.40, 0.50, 0.60
+0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50
 ```
 
 `s_i=1`, `x_i=1`, что записывается как `neutral_single_camera`.
+
+Для COCO-pretrained YOLO перед оценкой оставляются только классы, сопоставимые с VisDrone:
+
+```text
+person, bicycle, car, motorcycle, bus, truck
+```
+
+Остальные COCO-классы отбрасываются до метрик, чтобы не смешивать `train/cell phone/traffic light` и другие out-of-domain FP с задачей VisDrone.
 
 Запуск S2 на одной sequence и одном eps:
 
@@ -152,6 +169,26 @@ python scripts/run_experiment_matrix.py \
 ```
 
 Полный перебор запускать только после проверки `research_matrix.csv`.
+
+Corrected audit hard/soft:
+
+```bash
+python scripts/run_experiment_matrix.py \
+  --config configs/default.yaml \
+  --models yolov8n yolov8s \
+  --tasks vid \
+  --eps 0.016 0.032 \
+  --scenarios s0 s1 s_naive s2 \
+  --class-groups all vru vehicles \
+  --fgsm-loss class_only \
+  --sequence-list configs/selected_sequences.yaml \
+  --class-agnostic-eval true \
+  --filter-mode hard \
+  --output-dir outputs/results/corrected_hard \
+  --skip-ablation
+```
+
+Для soft заменить `--filter-mode soft` и `--output-dir outputs/results/corrected_soft`.
 
 Выходы:
 

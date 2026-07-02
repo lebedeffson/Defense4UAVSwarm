@@ -14,7 +14,7 @@ model:
   weights: yolov8n.pt
   tracker: bytetrack.yaml
   imgsz: 640
-  conf: 0.20
+  conf: 0.05
   iou: 0.7
   max_det: 300
 
@@ -46,6 +46,8 @@ filtering:
 
 evaluation:
   class_agnostic: true
+  prediction_class_filter: [person, bicycle, car, motorcycle, bus, truck]
+  prediction_class_filter_mode: drop
 
 xai:
   enabled: false

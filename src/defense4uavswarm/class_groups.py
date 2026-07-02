@@ -39,3 +39,15 @@ def filter_by_group(df: pd.DataFrame, cfg: dict, group: str) -> pd.DataFrame:
     aliases = groups_cfg.get("aliases", {})
     mask = normalized_names(df, aliases).isin(names)
     return df[mask].copy()
+
+
+def filter_predictions_by_allowed_classes(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+    allowed = cfg.get("evaluation", {}).get("prediction_class_filter")
+    if not allowed or df.empty or "class_name" not in df.columns:
+        return df
+    allowed_names = {str(x).lower() for x in allowed}
+    out = df.copy()
+    out["out_of_domain_prediction"] = ~out["class_name"].fillna("").astype(str).str.lower().isin(allowed_names)
+    if cfg.get("evaluation", {}).get("prediction_class_filter_mode", "drop") == "drop":
+        return out[~out["out_of_domain_prediction"]].copy()
+    return out

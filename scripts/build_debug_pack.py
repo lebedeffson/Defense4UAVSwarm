@@ -177,7 +177,9 @@ def write_reports(out: Path, cfg: dict, ds: VisDroneDataset, model_names: list[s
                 f"VisDrone class names: {VISDRONE_ID_TO_NAME}",
                 "Pred class_id is raw COCO class id from YOLO; pred class_name is COCO class name.",
                 f"Aliases used for grouping/class-aware audit: {groups.get('aliases', {})}",
-                "No full COCO->VisDrone class-id remap is currently applied.",
+                f"Prediction class filter: {cfg.get('evaluation', {}).get('prediction_class_filter')}",
+                f"Prediction class filter mode: {cfg.get('evaluation', {}).get('prediction_class_filter_mode')}",
+                "No full one-to-many COCO->VisDrone class-id remap is currently applied.",
                 "Default experiment evaluation is class_agnostic=true unless CLI overrides it.",
                 "Known partial semantic mapping: person->pedestrian, motorcycle->motor; car is not remapped to van.",
                 f"Class groups: {groups.get('class_groups', {})}",
@@ -201,6 +203,24 @@ def write_reports(out: Path, cfg: dict, ds: VisDroneDataset, model_names: list[s
         ),
         encoding="utf-8",
     )
+
+
+def class_filter_report(out: Path, cfg: dict, frames: list[pd.DataFrame]) -> None:
+    df = pd.concat([f for f in frames if f is not None and not f.empty], ignore_index=True) if frames else pd.DataFrame()
+    allowed = cfg.get("evaluation", {}).get("prediction_class_filter")
+    lines = [
+        f"prediction_class_filter: {allowed}",
+        f"prediction_class_filter_mode: {cfg.get('evaluation', {}).get('prediction_class_filter_mode')}",
+        "Saved prediction files are post-filter when mode=drop.",
+    ]
+    if not df.empty and "class_name" in df:
+        counts = df["class_name"].fillna("").astype(str).value_counts().to_dict()
+        lines.append(f"class_counts_after_filter: {counts}")
+        if allowed:
+            allowed_set = {str(x).lower() for x in allowed}
+            remaining_ood = sorted(set(df["class_name"].fillna("").astype(str).str.lower()) - allowed_set)
+            lines.append(f"remaining_out_of_domain_classes_after_filter: {remaining_ood}")
+    (out / "class_filter_report.txt").write_text("\n".join(lines), encoding="utf-8")
 
 
 def main() -> None:
@@ -265,6 +285,7 @@ def main() -> None:
     s2_frames = [pd.read_csv(p) for p in sorted(results.glob(f"{args.task}_{args.models[0]}_s2_*_eps_{args.eps}.csv"))]
     ki_distribution([s0_all, s1_first, *s2_frames]).to_csv(out / "ki_distribution.csv", index=False)
     q_tau_distribution(gt_all, s1_first, s2_frames, aliases).to_csv(out / "q_tau_distribution.csv", index=False)
+    class_filter_report(out, cfg, [s0_all, s1_first, *s2_frames])
     write_reports(out, cfg, ds, args.models, next(ds.frames([seq])))
     print(out)
 

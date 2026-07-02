@@ -24,6 +24,9 @@ def main() -> None:
         research = read(root / "research_matrix.csv")
         if research.empty:
             continue
+        research["run_name"] = root.name
+        if "filter_mode" not in research:
+            research["filter_mode"] = root.name
         asr = read(root / "asr_breakdown.csv")
         if not asr.empty:
             keys = ["fgsm_loss", "model_name", "scenario", "eps", "class_group", "t_norm"]
@@ -33,6 +36,10 @@ def main() -> None:
             research = research.merge(asr[[c for c in cols if c in asr]], on=[k for k in keys if k in research and k in asr], how="left")
         keep = [
             "fgsm_loss",
+            "run_name",
+            "filter_mode",
+            "model_conf",
+            "class_agnostic_eval",
             "model_name",
             "eps",
             "scenario",
@@ -63,8 +70,8 @@ def main() -> None:
 
     rows = []
     all_group = out[out["class_group"] == "all"]
-    for (loss, model, eps), g in all_group.groupby(["fgsm_loss", "model_name", "eps"]):
-        s0 = all_group[(all_group["fgsm_loss"] == loss) & (all_group["model_name"] == model) & (all_group["scenario"] == "S0")]
+    for (loss, run_name, filter_mode, model, eps), g in all_group.groupby(["fgsm_loss", "run_name", "filter_mode", "model_name", "eps"], dropna=False):
+        s0 = all_group[(all_group["fgsm_loss"] == loss) & (all_group["run_name"] == run_name) & (all_group["model_name"] == model) & (all_group["scenario"] == "S0")]
         s1 = g[g["scenario"] == "S1"]
         s2 = g[g["scenario"] == "S2"].sort_values("F1", ascending=False)
         if s0.empty or s1.empty or s2.empty:
@@ -72,6 +79,8 @@ def main() -> None:
         rows.append(
             {
                 "fgsm_loss": loss,
+                "run_name": run_name,
+                "filter_mode": filter_mode,
                 "model_name": model,
                 "eps": eps,
                 "S0_F1": float(s0.iloc[0]["F1"]),

@@ -6,7 +6,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from defense4uavswarm.config import ensure_dirs, require_packages
-from defense4uavswarm.class_groups import filter_by_group, load_class_groups
+from defense4uavswarm.class_groups import filter_by_group, filter_predictions_by_allowed_classes, load_class_groups
 from defense4uavswarm.datasets.visdrone import VisDroneDataset
 from defense4uavswarm.filtering.tnorms import apply_conf_threshold, apply_tnorm
 from defense4uavswarm.metadata import write_metadata
@@ -64,6 +64,7 @@ def run_detection(
             rows.extend(dets)
     df = to_frame(rows)
     df["fgsm_loss"] = cfg.get("fgsm", {}).get("loss", "class_only")
+    df = filter_predictions_by_allowed_classes(df, cfg)
     if len(df) and df["pred_track_id"].isna().all():
         df = add_simple_tracks(df)
     return df
@@ -104,6 +105,9 @@ def evaluate(
         "class_group": class_group,
         "t_norm": t_norm,
         "tau": tau,
+        "filter_mode": cfg.get("filtering", {}).get("tnorm_filter_mode") if cfg is not None else None,
+        "model_conf": cfg.get("model", {}).get("conf") if cfg is not None else None,
+        "class_agnostic_eval": cfg.get("evaluation", {}).get("class_agnostic") if cfg is not None else None,
         **d,
         **tr,
         "latency_ms": float(lat.mean()) if len(lat) else None,
