@@ -70,6 +70,13 @@ def main() -> None:
     p.add_argument("--recovery-decays", nargs="+", type=float, default=None)
     p.add_argument("--confirm-ages", nargs="+", type=int, default=None)
     p.add_argument("--max-recovered-tracks-per-frame", nargs="+", type=int, default=None)
+    p.add_argument("--min-recent-confidences", nargs="+", type=float, default=None)
+    p.add_argument("--min-mean-track-confidences", nargs="+", type=float, default=None)
+    p.add_argument("--recovered-conf-floors", nargs="+", type=float, default=None)
+    p.add_argument("--weak-detection-support", nargs="+", default=None)
+    p.add_argument("--weak-confidence-min", nargs="+", type=float, default=None)
+    p.add_argument("--weak-iou-min", nargs="+", type=float, default=None)
+    p.add_argument("--recovery-cooldown", nargs="+", type=int, default=None)
     args = p.parse_args()
     cfg = load_config(args.config)
     if args.fgsm_loss:
@@ -110,6 +117,20 @@ def main() -> None:
         cfg.setdefault("recovery", {})["confirm_ages"] = args.confirm_ages
     if args.max_recovered_tracks_per_frame:
         cfg.setdefault("recovery", {})["max_recovered_tracks_per_frame"] = args.max_recovered_tracks_per_frame
+    if args.min_recent_confidences:
+        cfg.setdefault("recovery", {})["min_recent_confidences"] = args.min_recent_confidences
+    if args.min_mean_track_confidences:
+        cfg.setdefault("recovery", {})["min_mean_track_confidences"] = args.min_mean_track_confidences
+    if args.recovered_conf_floors:
+        cfg.setdefault("recovery", {})["recovered_conf_floors"] = args.recovered_conf_floors
+    if args.weak_detection_support:
+        cfg.setdefault("recovery", {})["weak_detection_support"] = [str(x).lower() == "true" for x in args.weak_detection_support]
+    if args.weak_confidence_min:
+        cfg.setdefault("recovery", {})["weak_confidence_mins"] = args.weak_confidence_min
+    if args.weak_iou_min:
+        cfg.setdefault("recovery", {})["weak_iou_mins"] = args.weak_iou_min
+    if args.recovery_cooldown:
+        cfg.setdefault("recovery", {})["recovery_cooldowns"] = args.recovery_cooldown
     cfg.setdefault("semantic", {})["augmentation_max_frames"] = args.semantic_max_frames
     if args.confirm_age:
         cfg["filtering"]["confirm_age_grid"] = args.confirm_age

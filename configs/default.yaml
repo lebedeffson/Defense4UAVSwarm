@@ -87,10 +87,17 @@ filtering:
 
 recovery:
   modes: [hold_last, constant_velocity]
-  horizons: [2, 3]
-  decays: [0.80, 0.90]
-  confirm_ages: [3]
-  max_recovered_tracks_per_frame: [10]
+  horizons: [1, 2]
+  decays: [0.60, 0.70]
+  confirm_ages: [5, 8]
+  max_recovered_tracks_per_frame: [3, 5]
+  min_recent_confidences: [0.15, 0.20]
+  min_mean_track_confidences: [0.15]
+  recovered_conf_floors: [0.05, 0.08]
+  weak_detection_support: [true]
+  weak_confidence_mins: [0.01, 0.03]
+  weak_iou_mins: [0.30, 0.40]
+  recovery_cooldowns: [2]
 
 evaluation:
   class_agnostic: true

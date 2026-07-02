@@ -229,6 +229,7 @@ def run_experiment_matrix(
                         suffix = "s2_conf" if is_det else "s2"
                         save(frame, results / f"{task}_{model_name}_{suffix}_{name}_eps_{eps}.csv")
 
+                recovered_scenarios: dict[str, pd.DataFrame] = {}
                 if "s3_track_recovery" in scenarios and task in {"vid", "mot"}:
                     rec_cfg = mc.get("recovery", {})
                     s3, chosen, _ = run_track_recovery_calibration(
@@ -244,8 +245,40 @@ def run_experiment_matrix(
                         rec_cfg.get("decays", [0.8, 0.9]),
                         rec_cfg.get("confirm_ages", [3]),
                         rec_cfg.get("max_recovered_tracks_per_frame", [10]),
+                        scenario_name="S3_track_recovery",
+                        safe=False,
                     )
-                    write_recovery_reports(gt, s0, s1, s3, mc, eps, results)
+                    recovered_scenarios["S3_track_recovery"] = s3
+
+                if "s3_safe_recovery" in scenarios and task in {"vid", "mot"}:
+                    rec_cfg = mc.get("recovery", {})
+                    s3_safe, chosen, _ = run_track_recovery_calibration(
+                        gt,
+                        s0,
+                        s1,
+                        mc,
+                        model_name,
+                        eps,
+                        results,
+                        rec_cfg.get("modes", ["constant_velocity"]),
+                        rec_cfg.get("horizons", [1, 2]),
+                        rec_cfg.get("decays", [0.6, 0.7]),
+                        rec_cfg.get("confirm_ages", [5, 8]),
+                        rec_cfg.get("max_recovered_tracks_per_frame", [3, 5]),
+                        scenario_name="S3_safe_recovery",
+                        safe=True,
+                        min_recent_confidences=rec_cfg.get("min_recent_confidences", [0.15, 0.20]),
+                        min_mean_track_confidences=rec_cfg.get("min_mean_track_confidences", [0.15]),
+                        recovered_conf_floors=rec_cfg.get("recovered_conf_floors", [0.05, 0.08]),
+                        weak_detection_support_values=rec_cfg.get("weak_detection_support", [True]),
+                        weak_confidence_mins=rec_cfg.get("weak_confidence_mins", [0.01, 0.03]),
+                        weak_iou_mins=rec_cfg.get("weak_iou_mins", [0.30, 0.40]),
+                        recovery_cooldowns=rec_cfg.get("recovery_cooldowns", [2]),
+                    )
+                    recovered_scenarios["S3_safe_recovery"] = s3_safe
+
+                if recovered_scenarios:
+                    write_recovery_reports(gt, s0, s1, list(recovered_scenarios.items()), mc, eps, results)
 
                 for group in class_groups:
                     if "s1" in scenarios:
@@ -274,7 +307,10 @@ def run_experiment_matrix(
                                 m["ASR_track"] = breakdown["asr_total"]
                             rows.append(matrix_row(m, task, dataset_subset, len(sequences), num_frames, tau_conf))
                     if "s3_track_recovery" in scenarios and task in {"vid", "mot"}:
-                        m = evaluate(gt, s3, "S3_track_recovery", eps, cfg=mc, class_group=group, include_map=not fast_metrics and group == "all", include_tracking=tracking_enabled and group == "all" and not fast_metrics)
+                        m = evaluate(gt, recovered_scenarios["S3_track_recovery"], "S3_track_recovery", eps, cfg=mc, class_group=group, include_map=not fast_metrics and group == "all", include_tracking=tracking_enabled and group == "all" and not fast_metrics)
+                        rows.append(matrix_row(m, task, dataset_subset, len(sequences), num_frames, tau_conf))
+                    if "s3_safe_recovery" in scenarios and task in {"vid", "mot"}:
+                        m = evaluate(gt, recovered_scenarios["S3_safe_recovery"], "S3_safe_recovery", eps, cfg=mc, class_group=group, include_map=not fast_metrics and group == "all", include_tracking=tracking_enabled and group == "all" and not fast_metrics)
                         rows.append(matrix_row(m, task, dataset_subset, len(sequences), num_frames, tau_conf))
 
                 if build_ablation:
@@ -319,15 +355,15 @@ def run_experiment_matrix(
             "selected_sequences": sequences,
         },
     )
-    if "s3_track_recovery" in scenarios and (results / "selected_defense_params.yaml").exists():
+    if ("s3_track_recovery" in scenarios or "s3_safe_recovery" in scenarios) and (results / "selected_defense_params.yaml").exists():
         with open(results / "selected_defense_params.yaml", "r", encoding="utf-8") as f:
             selection = yaml.safe_load(f) or {}
         with open(results / "metadata.json", "r", encoding="utf-8") as f:
             metadata = json.load(f)
         metadata.update(
             {
-                "stage": "v1.6",
-                "scenario": "S3_track_recovery",
+                "stage": "v1.7" if "s3_safe_recovery" in scenarios else "v1.6",
+                "scenario": "S3_safe_recovery" if "s3_safe_recovery" in scenarios else "S3_track_recovery",
                 "selection_status": selection.get("selection_status"),
                 "holdout_allowed": bool(selection.get("holdout_allowed", False)),
                 "holdout_run": False,
