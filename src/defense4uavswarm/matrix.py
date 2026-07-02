@@ -125,7 +125,7 @@ def run_experiment_matrix(
 
             for group in class_groups:
                 if "s0" in scenarios:
-                    rows.append(matrix_row(evaluate(gt, s0, "S0", 0.0, cfg=mc, class_group=group, include_tracking=group == "all" and not fast_metrics), task, dataset_subset, len(sequences), num_frames, tau_conf))
+                    rows.append(matrix_row(evaluate(gt, s0, "S0", 0.0, cfg=mc, class_group=group, include_map=not fast_metrics and group == "all", include_tracking=group == "all" and not fast_metrics), task, dataset_subset, len(sequences), num_frames, tau_conf))
 
             for eps in eps_values:
                 s1 = load_or_run_detection(results / f"{task}_{model_name}_s1_fgsm_eps_{eps}.csv", mc, ds, "S1", eps, sequences, limit_sequences)
@@ -138,16 +138,16 @@ def run_experiment_matrix(
 
                 for group in class_groups:
                     if "s1" in scenarios:
-                        m = evaluate(gt, s1, "S1", eps, cfg=mc, class_group=group, include_tracking=group == "all" and not fast_metrics)
+                        m = evaluate(gt, s1, "S1", eps, cfg=mc, class_group=group, include_map=not fast_metrics and group == "all", include_tracking=group == "all" and not fast_metrics)
                         m["ASR"] = None
                         rows.append(matrix_row(m, task, dataset_subset, len(sequences), num_frames, tau_conf))
                     if "s_naive" in scenarios:
-                        m = evaluate(gt, naive, "S_naive", eps, "confidence", tau_conf, cfg=mc, class_group=group, include_tracking=group == "all" and not fast_metrics)
+                        m = evaluate(gt, naive, "S_naive", eps, "confidence", tau_conf, cfg=mc, class_group=group, include_map=not fast_metrics and group == "all", include_tracking=group == "all" and not fast_metrics)
                         m["ASR"] = None
                         rows.append(matrix_row(m, task, dataset_subset, len(sequences), num_frames, tau_conf))
                     if "s2" in scenarios:
                         for name, frame in s2_by_norm.items():
-                            m = evaluate(gt, frame, "S2", eps, name, tau_q[name], cfg=mc, class_group=group, include_tracking=group == "all" and not fast_metrics)
+                            m = evaluate(gt, frame, "S2", eps, name, tau_q[name], cfg=mc, class_group=group, include_map=not fast_metrics and group == "all", include_tracking=group == "all" and not fast_metrics)
                             m["ASR"] = None
                             rows.append(matrix_row(m, task, dataset_subset, len(sequences), num_frames, tau_conf))
 

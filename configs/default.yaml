@@ -41,6 +41,9 @@ filtering:
   tie_eps: 0.01
   s_feature_mode: neutral_single_camera
 
+evaluation:
+  class_agnostic: true
+
 xai:
   enabled: false
   method: gradcam

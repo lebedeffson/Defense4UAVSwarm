@@ -125,6 +125,7 @@ def fgsm_image_with_diagnostics(
         "loss_clean": float(loss.detach().cpu()),
         "loss_adv": float(loss_adv.detach().cpu()),
         "loss_mode_actual": actual_loss_mode,
+        "actual_loss_used": actual_loss_mode,
         "grad_l1": float(grad.abs().mean().cpu()),
         "grad_l2": float(torch.linalg.vector_norm(grad).cpu()),
         "grad_linf": float(grad.abs().max().cpu()),

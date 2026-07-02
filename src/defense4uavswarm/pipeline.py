@@ -6,7 +6,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from defense4uavswarm.config import ensure_dirs, require_packages
-from defense4uavswarm.class_groups import filter_by_group
+from defense4uavswarm.class_groups import filter_by_group, load_class_groups
 from defense4uavswarm.datasets.visdrone import VisDroneDataset
 from defense4uavswarm.filtering.tnorms import apply_conf_threshold, apply_tnorm
 from defense4uavswarm.metadata import write_metadata
@@ -87,7 +87,14 @@ def evaluate(
         pred_eval = filter_by_group(pred, cfg, class_group)
     if include_map is None:
         include_map = class_group == "all"
-    d = precision_recall_f1(gt_eval, pred_eval, include_map=include_map)
+    groups_cfg = load_class_groups(cfg["class_groups_file"]) if cfg is not None else {}
+    d = precision_recall_f1(
+        gt_eval,
+        pred_eval,
+        include_map=include_map,
+        class_agnostic=bool(cfg.get("evaluation", {}).get("class_agnostic", True)) if cfg is not None else True,
+        aliases=groups_cfg.get("aliases", {}),
+    )
     tr = tracking_metrics(gt_eval, pred_eval) if include_tracking else {"MOTA": None, "IDF1": None, "IDSW": None, "tracking_error": None, "track_breaks": None}
     lat = pred["latency_ms"].dropna()
     return {
@@ -106,13 +113,15 @@ def evaluate(
 
 def build_threshold_selection(gt: pd.DataFrame, s0: pd.DataFrame, cfg: dict) -> tuple[float, dict[str, float], pd.DataFrame]:
     rows = []
-    tau_conf, conf_grid = choose_threshold(gt, s0, cfg["filtering"]["confidence_grid"], "confidence", cfg["filtering"]["tie_eps"])
+    groups_cfg = load_class_groups(cfg["class_groups_file"])
+    class_agnostic = bool(cfg.get("evaluation", {}).get("class_agnostic", True))
+    tau_conf, conf_grid = choose_threshold(gt, s0, cfg["filtering"]["confidence_grid"], "confidence", cfg["filtering"]["tie_eps"], class_agnostic=class_agnostic, aliases=groups_cfg.get("aliases", {}))
     for r in conf_grid.to_dict("records"):
         rows.append({"mode": "S_naive", "t_norm": "confidence", "tau": r["tau"], "F1": r["F1"], "selected": r["tau"] == tau_conf})
     tau_q = {}
     for name in cfg["filtering"]["t_norms"]:
         scored = apply_tnorm(s0, name, 0.0)
-        tau, grid = choose_threshold(gt, scored, cfg["filtering"]["tau_grid"], "Q_i", cfg["filtering"]["tie_eps"])
+        tau, grid = choose_threshold(gt, scored, cfg["filtering"]["tau_grid"], "Q_i", cfg["filtering"]["tie_eps"], class_agnostic=class_agnostic, aliases=groups_cfg.get("aliases", {}))
         tau_q[name] = tau
         for r in grid.to_dict("records"):
             rows.append({"mode": "S2", "t_norm": name, "tau": r["tau"], "F1": r["F1"], "selected": r["tau"] == tau})

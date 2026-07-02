@@ -21,12 +21,15 @@ def main() -> None:
     p.add_argument("--output-dir", default=None)
     p.add_argument("--fast-metrics", action="store_true")
     p.add_argument("--skip-ablation", action="store_true")
+    p.add_argument("--class-agnostic-eval", choices=["true", "false"], default=None)
     args = p.parse_args()
     cfg = load_config(args.config)
     if args.fgsm_loss:
         cfg["fgsm"]["loss"] = args.fgsm_loss
     if args.output_dir:
         cfg["outputs"]["results_dir"] = args.output_dir
+    if args.class_agnostic_eval is not None:
+        cfg.setdefault("evaluation", {})["class_agnostic"] = args.class_agnostic_eval == "true"
     run_experiment_matrix(
         cfg,
         model_names=args.models,

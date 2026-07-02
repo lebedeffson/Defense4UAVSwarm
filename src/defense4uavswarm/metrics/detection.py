@@ -3,10 +3,17 @@ from __future__ import annotations
 import pandas as pd
 import numpy as np
 
+from defense4uavswarm.class_groups import normalized_names
 from defense4uavswarm.tracking.simple import iou
 
 
-def match_frame(gt: pd.DataFrame, pred: pd.DataFrame, iou_thr: float = 0.5) -> tuple[int, int, int, list[tuple[int, int]]]:
+def match_frame(
+    gt: pd.DataFrame,
+    pred: pd.DataFrame,
+    iou_thr: float = 0.5,
+    class_agnostic: bool = True,
+    aliases: dict[str, str] | None = None,
+) -> tuple[int, int, int, list[tuple[int, int]]]:
     pred = pred[pred["accepted"] == True] if "accepted" in pred else pred
     if len(gt) == 0:
         return 0, len(pred), 0, []
@@ -25,6 +32,10 @@ def match_frame(gt: pd.DataFrame, pred: pd.DataFrame, iou_thr: float = 0.5) -> t
     p_area = np.maximum(0.0, p[:, 2] - p[:, 0]) * np.maximum(0.0, p[:, 3] - p[:, 1])
     denom = g_area[:, None] + p_area[None, :] - inter
     scores = np.divide(inter, denom, out=np.zeros_like(inter), where=denom > 0)
+    if not class_agnostic:
+        gt_names = normalized_names(gt, aliases or {}).to_numpy()
+        pred_names = normalized_names(pred, aliases or {}).to_numpy()
+        scores = np.where(gt_names[:, None] == pred_names[None, :], scores, 0.0)
     gi, pi = np.where(scores >= iou_thr)
     order = np.argsort(scores[gi, pi])[::-1]
     used_g, used_p, matches = set(), set(), []
@@ -41,7 +52,7 @@ def match_frame(gt: pd.DataFrame, pred: pd.DataFrame, iou_thr: float = 0.5) -> t
     return tp, fp, fn, matches
 
 
-def ap50(gt: pd.DataFrame, pred: pd.DataFrame, iou_thr: float = 0.5) -> float:
+def ap50(gt: pd.DataFrame, pred: pd.DataFrame, iou_thr: float = 0.5, class_agnostic: bool = True, aliases: dict[str, str] | None = None) -> float:
     if len(gt) == 0:
         return 0.0
     pred = pred[pred["accepted"] == True] if "accepted" in pred else pred
@@ -74,6 +85,10 @@ def ap50(gt: pd.DataFrame, pred: pd.DataFrame, iou_thr: float = 0.5) -> float:
         p_area = max(0.0, (pbox[2] - pbox[0]) * (pbox[3] - pbox[1]))
         denom = g_area + p_area - inter
         scores = np.divide(inter, denom, out=np.zeros_like(inter), where=denom > 0)
+        if not class_agnostic:
+            gt_names = normalized_names(gt.loc[gt_indices], aliases or {}).to_numpy()
+            pred_name = normalized_names(pd.DataFrame([p._asdict()]), aliases or {}).iloc[0]
+            scores = np.where(gt_names == pred_name, scores, 0.0)
         order = np.argsort(scores)[::-1]
         best_gi, best = None, 0.0
         for pos in order:
@@ -103,13 +118,20 @@ def ap50(gt: pd.DataFrame, pred: pd.DataFrame, iou_thr: float = 0.5) -> float:
     return ap
 
 
-def precision_recall_f1(gt: pd.DataFrame, pred: pd.DataFrame, iou_thr: float = 0.5, include_map: bool = True) -> dict:
+def precision_recall_f1(
+    gt: pd.DataFrame,
+    pred: pd.DataFrame,
+    iou_thr: float = 0.5,
+    include_map: bool = True,
+    class_agnostic: bool = True,
+    aliases: dict[str, str] | None = None,
+) -> dict:
     tp = fp = fn = 0
     pred_frames = {k: v for k, v in pred.groupby(["sequence_id", "frame_id"])} if len(pred) else {}
     empty_pred = pred.iloc[0:0]
     for (seq, frame), gt_f in gt.groupby(["sequence_id", "frame_id"]):
         pred_f = pred_frames.get((seq, frame), empty_pred)
-        a, b, c, _ = match_frame(gt_f, pred_f, iou_thr)
+        a, b, c, _ = match_frame(gt_f, pred_f, iou_thr, class_agnostic=class_agnostic, aliases=aliases)
         tp += a
         fp += b
         fn += c
@@ -126,17 +148,25 @@ def precision_recall_f1(gt: pd.DataFrame, pred: pd.DataFrame, iou_thr: float = 0
         "TP": tp,
         "FP": fp,
         "FN": fn,
-        "mAP": ap50(gt, pred, iou_thr) if include_map else None,
+        "mAP": ap50(gt, pred, iou_thr, class_agnostic=class_agnostic, aliases=aliases) if include_map else None,
     }
 
 
-def choose_threshold(gt: pd.DataFrame, pred: pd.DataFrame, grid: list[float], score_col: str, tie_eps: float) -> tuple[float, pd.DataFrame]:
+def choose_threshold(
+    gt: pd.DataFrame,
+    pred: pd.DataFrame,
+    grid: list[float],
+    score_col: str,
+    tie_eps: float,
+    class_agnostic: bool = True,
+    aliases: dict[str, str] | None = None,
+) -> tuple[float, pd.DataFrame]:
     rows = []
     best_tau, best_f1 = grid[0], -1.0
     for tau in grid:
         cand = pred.copy()
         cand["accepted"] = cand[score_col] >= tau
-        m = precision_recall_f1(gt, cand, include_map=False)
+        m = precision_recall_f1(gt, cand, include_map=False, class_agnostic=class_agnostic, aliases=aliases)
         rows.append({"tau": tau, **m})
         if m["F1"] > best_f1 + tie_eps or abs(m["F1"] - best_f1) < tie_eps and tau < best_tau:
             best_tau, best_f1 = tau, m["F1"]
