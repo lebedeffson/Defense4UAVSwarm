@@ -26,7 +26,7 @@ def main() -> None:
     p.add_argument("--fast-metrics", action="store_true")
     p.add_argument("--skip-ablation", action="store_true")
     p.add_argument("--class-agnostic-eval", choices=["true", "false"], default=None)
-    filter_choices = ["hard", "soft", "hard_filter", "soft_reweight", "delayed_hard_filter", "track_aware", "new_track_suppression"]
+    filter_choices = ["hard", "soft", "hard_filter", "soft_reweight", "delayed_hard_filter", "track_aware", "new_track_suppression", "risk_gated_new_suppression", "low_conf_new_suppression", "suspicious_label_only"]
     p.add_argument("--filter-mode", choices=filter_choices, default=None)
     p.add_argument("--filter-modes", nargs="+", choices=filter_choices, default=None)
     p.add_argument("--k-variants", nargs="+", choices=["center", "iou", "combined", "gate", "acc", "robust_min"], default=None)
@@ -35,6 +35,8 @@ def main() -> None:
     p.add_argument("--tau-q-grid", nargs="+", type=float, default=None)
     p.add_argument("--tau-existing-grid", nargs="+", type=float, default=None)
     p.add_argument("--tau-new-grid", nargs="+", type=float, default=None)
+    p.add_argument("--risk-tau-grid", nargs="+", type=float, default=None)
+    p.add_argument("--new-conf-tau-grid", nargs="+", type=float, default=None)
     p.add_argument("--confirm-age", nargs="+", type=int, default=None)
     p.add_argument("--soft-conf-floors", nargs="+", type=float, default=None)
     p.add_argument("--confirmed-conf-floors", nargs="+", type=float, default=None)
@@ -61,6 +63,10 @@ def main() -> None:
         cfg["filtering"]["tau_existing_grid"] = args.tau_existing_grid
     if args.tau_new_grid:
         cfg["filtering"]["tau_new_grid"] = args.tau_new_grid
+    if args.risk_tau_grid:
+        cfg["filtering"]["risk_tau_grid"] = args.risk_tau_grid
+    if args.new_conf_tau_grid:
+        cfg["filtering"]["new_conf_tau_grid"] = args.new_conf_tau_grid
     if args.confirm_age:
         cfg["filtering"]["confirm_age_grid"] = args.confirm_age
     if args.gamma_assoc:

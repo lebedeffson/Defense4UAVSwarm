@@ -62,6 +62,9 @@ def apply_tnorm(
     confirm_age: int = 3,
     max_confirm_missed: int = 1,
     confirmed_conf_floor: float = 0.03,
+    risk_tau: float = 0.7,
+    new_conf_tau: float = 0.2,
+    risk_weights: tuple[float, float, float] = (0.4, 0.3, 0.3),
 ):
     if preassociation:
         return _apply_tnorm_preassociation(
@@ -83,6 +86,9 @@ def apply_tnorm(
             confirm_age=confirm_age,
             max_confirm_missed=max_confirm_missed,
             confirmed_conf_floor=confirmed_conf_floor,
+            risk_tau=risk_tau,
+            new_conf_tau=new_conf_tau,
+            risk_weights=risk_weights,
         )
 
     out = df.copy()
@@ -112,6 +118,8 @@ def apply_tnorm(
     out["tau_new"] = tau if tau_new is None else tau_new
     out["confirmed_conf_floor"] = confirmed_conf_floor
     out["confirm_age"] = confirm_age
+    out["risk_tau"] = risk_tau
+    out["new_conf_tau"] = new_conf_tau
     if "track_status" not in out:
         out["track_status"] = [
             _status_from_existing_row(r, int(confirm_age), int(max_confirm_missed))
@@ -150,6 +158,9 @@ def _apply_tnorm_preassociation(
     confirm_age: int,
     max_confirm_missed: int,
     confirmed_conf_floor: float,
+    risk_tau: float,
+    new_conf_tau: float,
+    risk_weights: tuple[float, float, float],
 ) -> pd.DataFrame:
     out = df.copy()
     if out.empty:
@@ -185,6 +196,9 @@ def _apply_tnorm_preassociation(
         "missed_frames",
         "suspicious",
         "filter_action",
+        "risk_new",
+        "risk_tau",
+        "new_conf_tau",
     ]:
         out[col] = None
     mode_label = "soft_reweight" if mode == "soft" else "delayed_hard_filter" if mode == "delayed" else mode
@@ -195,6 +209,8 @@ def _apply_tnorm_preassociation(
     out["tau_new"] = tau_new
     out["confirmed_conf_floor"] = confirmed_conf_floor
     out["confirm_age"] = confirm_age
+    out["risk_tau"] = risk_tau
+    out["new_conf_tau"] = new_conf_tau
     out["gamma_assoc"] = gamma_assoc
     out["soft_conf_floor"] = soft_conf_floor
     out["reject_patience"] = reject_patience
@@ -275,7 +291,33 @@ def _apply_tnorm_preassociation(
                 low_q_streak = 0
             suspicious = q_smooth < (tau_existing if track_status in {"confirmed_existing", "tentative_existing"} else tau_new)
             filter_action = "keep"
-            if mode == "track_aware":
+            risk_new = _risk_new(float(det.confidence), k_i, assoc_score, risk_weights)
+            if mode == "risk_gated_new_suppression":
+                if track_status in {"confirmed_existing", "tentative_existing"}:
+                    accepted = True
+                    should_update = True
+                    filter_action = "keep_confirmed" if track_status == "confirmed_existing" else "keep_tentative"
+                else:
+                    accepted = risk_new < float(risk_tau)
+                    should_update = accepted
+                    suspicious = risk_new >= float(risk_tau)
+                    filter_action = "keep" if accepted else "reject_new"
+            elif mode == "low_conf_new_suppression":
+                if track_status in {"confirmed_existing", "tentative_existing"}:
+                    accepted = True
+                    should_update = True
+                    filter_action = "keep_confirmed" if track_status == "confirmed_existing" else "keep_tentative"
+                else:
+                    accepted = float(det.confidence) >= float(new_conf_tau)
+                    should_update = accepted
+                    suspicious = not accepted
+                    filter_action = "keep" if accepted else "reject_new"
+            elif mode == "suspicious_label_only":
+                accepted = True
+                should_update = True
+                suspicious = bool(suspicious or (track_status in {"new_candidate", "unmatched_detection"} and risk_new >= float(risk_tau)))
+                filter_action = "label_suspicious" if suspicious else "keep"
+            elif mode == "track_aware":
                 if track_status == "confirmed_existing":
                     accepted = True
                     if suspicious:
@@ -338,6 +380,9 @@ def _apply_tnorm_preassociation(
             out.at[idx, "Q_raw"] = q_raw
             out.at[idx, "Q_smooth"] = q_smooth
             out.at[idx, "Q_i"] = q_smooth
+            out.at[idx, "risk_new"] = risk_new
+            out.at[idx, "risk_tau"] = risk_tau
+            out.at[idx, "new_conf_tau"] = new_conf_tau
             out.at[idx, "confidence_new"] = out.at[idx, "confidence"]
             out.at[idx, "low_Q_streak"] = low_q_streak
             out.at[idx, "suspicious"] = bool(suspicious)
@@ -370,6 +415,14 @@ def _status_from_existing_row(row, confirm_age: int, max_confirm_missed: int) ->
     if age >= 1:
         return "tentative_existing"
     return "new_candidate"
+
+
+def _risk_new(confidence: float, k_i: float, assoc_score: float, weights: tuple[float, float, float]) -> float:
+    w_conf, w_k, w_assoc = weights
+    conf = max(0.0, min(1.0, confidence))
+    k = max(0.0, min(1.0, k_i))
+    assoc = max(0.0, min(1.0, assoc_score))
+    return w_conf * (1.0 - conf) + w_k * (1.0 - k) + w_assoc * (1.0 - assoc)
 
 
 def _box(row) -> tuple[float, float, float, float]:

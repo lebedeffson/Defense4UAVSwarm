@@ -53,6 +53,9 @@ filtering:
   max_confirm_missed: 1
   tau_existing_grid: [0.05, 0.10, 0.15, 0.20]
   tau_new_grid: [0.15, 0.20, 0.25, 0.30, 0.35]
+  risk_tau_grid: [0.50, 0.60, 0.70, 0.80]
+  new_conf_tau_grid: [0.10, 0.15, 0.20, 0.25, 0.30]
+  risk_weights: [0.40, 0.30, 0.30]
   reject_patience: 1
   reject_patience_grid: [1, 2, 3]
   max_missed_frames: 5
