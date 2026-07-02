@@ -1,0 +1,57 @@
+detector_pretraining: COCO
+used_coco_classes:
+  - person
+  - bicycle
+  - car
+  - truck
+  - bus
+  - motorcycle
+mapping:
+  person:
+    - pedestrian
+    - people
+  bicycle:
+    - bicycle
+  car:
+    - car
+    - van
+  truck:
+    - truck
+  bus:
+    - bus
+  motorcycle:
+    - motor
+unmapped_visdrone_classes:
+  - tricycle
+  - awning-tricycle
+ignored_coco_classes:
+  - airplane
+  - boat
+  - train
+  - traffic light
+  - fire hydrant
+  - stop sign
+  - parking meter
+  - bench
+  - bird
+  - cat
+  - dog
+  - horse
+  - sheep
+  - cow
+  - elephant
+  - bear
+  - zebra
+  - giraffe
+  - backpack
+  - umbrella
+  - handbag
+  - tie
+  - suitcase
+  - sports ball
+  - kite
+  - baseball bat
+  - baseball glove
+  - skateboard
+  - surfboard
+  - tennis racket

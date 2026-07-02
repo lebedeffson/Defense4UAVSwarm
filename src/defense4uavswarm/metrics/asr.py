@@ -97,6 +97,56 @@ def attack_success_breakdown(gt: pd.DataFrame, clean: pd.DataFrame, attacked: pd
     }
 
 
+def attack_success_rate_det(
+    gt: pd.DataFrame,
+    clean: pd.DataFrame,
+    attacked: pd.DataFrame,
+    delta: float = 0.05,
+) -> float:
+    breakdown = attack_success_breakdown_det(gt, clean, attacked, delta=delta)
+    return breakdown["ASR_det"]
+
+
+def attack_success_breakdown_det(
+    gt: pd.DataFrame,
+    clean: pd.DataFrame,
+    attacked: pd.DataFrame,
+    delta: float = 0.05,
+) -> dict:
+    clean_frames = {k: v for k, v in clean.groupby(["sequence_id", "frame_id"])}
+    attacked_frames = {k: v for k, v in attacked.groupby(["sequence_id", "frame_id"])}
+    total = bad = miss = fp_event = f1_drop = 0
+    for (seq, frame), gt_f in gt.groupby(["sequence_id", "frame_id"]):
+        total += 1
+        clean_f = clean_frames.get((seq, frame), clean.iloc[0:0])
+        atk_f = attacked_frames.get((seq, frame), attacked.iloc[0:0])
+        c_tp, c_fp, c_fn, clean_pairs = match_frame(gt_f, clean_f)
+        a_tp, a_fp, a_fn, atk_pairs = match_frame(gt_f, atk_f)
+        c_f1 = 2 * c_tp / max(1, 2 * c_tp + c_fp + c_fn)
+        a_f1 = 2 * a_tp / max(1, 2 * a_tp + a_fp + a_fn)
+        clean_hit_gt = {gi for gi, _ in clean_pairs}
+        attacked_hit_gt = {gi for gi, _ in atk_pairs}
+        event = False
+        if clean_hit_gt - attacked_hit_gt:
+            miss += 1
+            event = True
+        if a_fp > c_fp:
+            fp_event += 1
+            event = True
+        if a_f1 < c_f1 - delta:
+            f1_drop += 1
+            event = True
+        if event:
+            bad += 1
+    return {
+        "ASR_det": bad / max(1, total),
+        "asr_det_miss_images": miss,
+        "asr_det_fp_images": fp_event,
+        "asr_det_f1_drop_images": f1_drop,
+        "asr_det_total_images": total,
+    }
+
+
 def _pred_ids(df: pd.DataFrame, indices) -> set:
     ids = set()
     if "pred_track_id" not in df:

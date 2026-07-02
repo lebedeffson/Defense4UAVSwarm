@@ -168,3 +168,127 @@ def discover_visdrone_subsets(root: str | Path) -> list[dict]:
         split = "val" if "val" in name.lower() else "train" if "train" in name.lower() else "test-dev" if "test" in name.lower() else "unknown"
         rows.append({"path": p, "dataset_subset": f"{subset}-{split}", "subset": subset, "split": split})
     return rows
+
+
+class VisDroneDetDataset:
+    def __init__(self, root: str | Path, split: str = "val") -> None:
+        self.root = Path(root)
+        self.split = split
+        self.split_root = self._find_split_root(split)
+        self.images_dir = self.split_root / "images"
+        self.annotations_dir = self.split_root / "annotations"
+        self.labels_dir = self.split_root / "labels"
+        if not self.images_dir.exists():
+            raise FileNotFoundError(f"No DET images dir: {self.images_dir}")
+        if not self.annotations_dir.exists() and not self.labels_dir.exists():
+            raise FileNotFoundError(f"No DET annotations/labels dir under: {self.split_root}")
+
+    def _find_split_root(self, split: str) -> Path:
+        if not self.root.exists():
+            raise FileNotFoundError(f"VisDrone root does not exist: {self.root}")
+        split_name = {"train": "train", "val": "val", "test": "test"}[split]
+        candidates = []
+        for p in self.root.rglob("*"):
+            if not p.is_dir():
+                continue
+            name = p.name.lower()
+            if "det" not in name or split_name not in name:
+                continue
+            if (p / "images").exists() and ((p / "annotations").exists() or (p / "labels").exists()):
+                candidates.append(p)
+        if (self.root / "images" / split_name).exists() and (self.root / "labels" / split_name).exists():
+            return self.root
+        if (self.root / "images").exists() and ((self.root / "annotations").exists() or (self.root / "labels").exists()):
+            return self.root
+        if not candidates:
+            raise FileNotFoundError(f"Cannot find VisDrone DET {split} under {self.root}")
+        return sorted(candidates, key=lambda p: (len(p.parts), str(p)))[0]
+
+    def sequence_ids(self) -> list[str]:
+        image_root = self.images_dir / self.split if (self.images_dir / self.split).exists() else self.images_dir
+        return sorted(p.stem for p in image_root.glob("*.jpg"))
+
+    def frames(self, sequence_ids: list[str] | None = None) -> Iterator[FrameRecord]:
+        image_root = self.images_dir / self.split if (self.images_dir / self.split).exists() else self.images_dir
+        allowed = set(sequence_ids or self.sequence_ids())
+        for image_path in sorted(image_root.glob("*.jpg")):
+            if image_path.stem not in allowed:
+                continue
+            yield FrameRecord(image_path.stem, 1, image_path)
+
+    def annotations(self, sequence_id: str) -> pd.DataFrame:
+        ann_path = self.annotations_dir / f"{sequence_id}.txt"
+        if ann_path.exists():
+            return self._annotations_from_visdrone_txt(sequence_id, ann_path)
+        label_root = self.labels_dir / self.split if (self.labels_dir / self.split).exists() else self.labels_dir
+        label_path = label_root / f"{sequence_id}.txt"
+        if label_path.exists():
+            return self._annotations_from_yolo_txt(sequence_id, label_path)
+        return pd.DataFrame()
+
+    def _annotations_from_visdrone_txt(self, sequence_id: str, path: Path) -> pd.DataFrame:
+        rows = []
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = [x.strip() for x in line.strip().split(",")]
+                if len(parts) < 8:
+                    continue
+                x, y, w, h, score, cls, trunc, occ = [float(x) for x in parts[:8]]
+                if int(cls) <= 0 or int(cls) >= 11 or score <= 0:
+                    continue
+                rows.append(
+                    {
+                        "sequence_id": sequence_id,
+                        "frame_id": 1,
+                        "gt_track_id": -1,
+                        "class_id": int(cls),
+                        "class_name": VISDRONE_CLASSES.get(int(cls), "unknown"),
+                        "x1": x,
+                        "y1": y,
+                        "x2": x + w,
+                        "y2": y + h,
+                        "score": score,
+                        "truncation": trunc,
+                        "occlusion": occ,
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    def _annotations_from_yolo_txt(self, sequence_id: str, path: Path) -> pd.DataFrame:
+        image = next(self.frames([sequence_id])).image_path
+        img = cv2.imread(str(image))
+        if img is None:
+            raise RuntimeError(f"Cannot read image: {image}")
+        height, width = img.shape[:2]
+        rows = []
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = [x.strip() for x in line.strip().split()]
+                if len(parts) < 5:
+                    continue
+                cls0, cx, cy, w, h = [float(x) for x in parts[:5]]
+                cls = int(cls0) + 1
+                bw, bh = w * width, h * height
+                x1, y1 = cx * width - bw / 2, cy * height - bh / 2
+                rows.append(
+                    {
+                        "sequence_id": sequence_id,
+                        "frame_id": 1,
+                        "gt_track_id": -1,
+                        "class_id": cls,
+                        "class_name": VISDRONE_CLASSES.get(cls, "unknown"),
+                        "x1": x1,
+                        "y1": y1,
+                        "x2": x1 + bw,
+                        "y2": y1 + bh,
+                        "score": 1,
+                        "truncation": 0,
+                        "occlusion": 0,
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    def all_annotations(self, sequence_ids: list[str] | None = None) -> pd.DataFrame:
+        frames = [self.annotations(seq) for seq in (sequence_ids or self.sequence_ids())]
+        frames = [f for f in frames if not f.empty]
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()

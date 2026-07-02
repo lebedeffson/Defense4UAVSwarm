@@ -6,6 +6,14 @@ class_groups:
     - tricycle
     - awning-tricycle
     - motor
+  pedestrians:
+    - pedestrian
+    - people
+  micromobility:
+    - bicycle
+    - tricycle
+    - awning-tricycle
+    - motor
   vehicles:
     - car
     - van

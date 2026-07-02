@@ -109,7 +109,7 @@ tau_conf* in {0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80}
 Для `S2`:
 
 ```text
-tau_Q* in {0.30, 0.40, 0.50, 0.60}
+tau_Q* in {0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50}
 ```
 
 Критерий — максимум F1. Если F1 отличается меньше чем на `0.01`, выбирается меньший порог.
@@ -306,3 +306,151 @@ FGSM preprocessing пока resize-based, а Ultralytics inference исполь�
 COCO->VisDrone remap неполный
 fine-tune на VisDrone нужен для сильного baseline
 ```
+
+## 15. DET-only Auxiliary Task
+
+`VisDrone2019-DET` не заменяет `VID/MOT` для трекинговой части: в DET нет нормальных видеопоследовательностей и `track_id`, поэтому `MOTA`, `IDF1`, `IDSW`, `track_breaks` и track-level ASR не считаются.
+
+DET используется только как вспомогательная проверка устойчивости детектора на статических изображениях:
+
+```text
+task = det
+kinematics_enabled = false
+tracking_enabled = false
+k_i = s_i = x_i = 1
+scenario S2_conf = detection-only confidence T-норма
+```
+
+Для DET считаются только detection-метрики (`precision`, `recall`, `F1`, `mAP`, `FP`, `FN`, `latency_ms`) и отдельный `ASR_det`: доля изображений, где после FGSM появился пропуск clean-detected объекта, выросло число FP или F1 по изображению упал ниже заданного delta-порога.
+
+Threshold selection разделяет нижний порог модели и порог пост-фильтра:
+
+```text
+model_conf = detector inference floor
+S_naive confidence grid = 0.20 ... 0.80
+S2_conf tau_Q_det grid = 0.05, 0.10, 0.20, 0.30, 0.40, 0.50
+```
+
+Если несколько порогов дают одинаковый F1 или отличаются меньше чем на `0.01`, выбирается меньший порог. Это правило применяется одинаково для `S_naive`, `S2` и `S2_conf`.
+
+COCO-to-VisDrone class mapping фиксируется в `configs/class_mapping_coco_to_visdrone.yaml`. Для COCO-pretrained YOLO используются только классы `person`, `bicycle`, `car`, `truck`, `bus`, `motorcycle`; `tricycle` и `awning-tricycle` остаются unmapped. Class groups `all`, `vru` и `vehicles` интерпретируются после этого mapping/filtering.
+
+Чтобы объяснить, почему фильтр помогает или не помогает, DET-summary сохраняет `num_detections_before_filter`, `num_detections_after_filter`, `num_rejected`, `rejection_rate`, а FGSM diagnostics сохраняют `mean_abs_perturbation`, `max_abs_perturbation` и `mean_gradient_norm`. Для sanity-check метрик формируется `metric_debug_sample.csv` с GT/TP/FP/FN по первым изображениям.
+
+## 16. VID Calibration/Holdout Protocol
+
+VID/MOT results use a fixed calibration/holdout protocol. Calibration sequences are used to select defense parameters; holdout sequences are used for final reporting. The split is recorded in `configs/vid_split.yaml` and copied into run metadata as `vid_split_file`, `tuning_split`, and `evaluation_split`.
+
+The original clean-only threshold selection remains a baseline. The robust defense selection ranks candidates on attacked calibration data subject to a clean-quality constraint:
+
+```text
+clean_F1(S2) >= clean_F1(S0) - 0.02
+```
+
+The preferred score is:
+
+```text
+robust_score = 0.5 * F1_attack + 0.3 * IDF1_attack - 0.2 * ASR_track
+```
+
+If IDF1 is not computed during a fast sweep, the fallback score is:
+
+```text
+robust_score = 0.7 * F1_attack - 0.3 * ASR_track
+```
+
+The kinematic term is evaluated as three variants:
+
+```text
+k_center = exp(-d_center / alpha)
+k_iou = IoU(bbox_predicted, bbox_detected)
+k_combined = sqrt(k_center * k_iou)
+```
+
+where `bbox_predicted` is obtained by constant-velocity extrapolation of the previous tracked box. `alpha = alpha_scale * alpha_base`, with `alpha_base` derived from the tracked bbox scale. Temporal smoothing is optional:
+
+```text
+Q_smooth(t) = beta * Q(t) + (1 - beta) * Q_smooth(t-1)
+```
+
+Both `hard_filter` and `soft_reweight` are supported. Hard filtering accepts detections with `Q_i >= tau_Q`; soft reweighting uses `confidence_new = confidence * Q_i` and then applies the threshold.
+
+### Pre-association kinematics
+
+The defensive kinematic feature must be computed before accepting the current detection into the defense state. The defense state is independent of the tracker state already updated by ByteTrack. For each frame, active defense tracks are extrapolated with constant velocity, detections are matched to predicted tracks, and `k_i` is computed from the residual before the state is updated.
+
+No-op candidates are not valid selected defenses. A candidate must satisfy:
+
+```text
+clean_F1_drop <= 0.02
+rejection_rate_attack >= 0.01
+```
+
+If no candidate satisfies both constraints, the run writes `selection_status: not_selected` and holdout should not be run.
+
+### Recall-aware v1.1 selection
+
+After pre-association kinematics makes `k_i` non-neutral, calibration uses a recall-aware objective to avoid selecting an overly aggressive filter:
+
+```text
+robust_score =
+ 0.50 * F1_attack
+-0.25 * ASR_track
+-0.15 * FN_rate_attack
+-0.10 * clean_F1_drop
+```
+
+The primary constraints are:
+
+```text
+clean_F1_drop <= 0.02
+recall_drop_vs_S1 <= 0.03
+rejection_rate_attack >= 0.01
+```
+
+### Track-aware v1.2 selection
+
+v1.2 does not apply one global reject rule to every detection. It separates:
+
+```text
+confirmed_existing
+tentative_existing
+new_candidate
+unmatched_detection
+```
+
+For `confirmed_existing`, low-Q detections are kept and optionally downweighted. For `tentative_existing`, rejection is delayed by `reject_patience`. For `new_candidate/unmatched_detection`, `tau_new` can suppress new false tracks.
+
+The selection score is:
+
+```text
+robust_score =
+ 0.30 * F1_attack
++0.25 * IDF1_attack
+-0.15 * ASR_any
+-0.15 * IDSW_rate
+-0.10 * track_break_rate
+-0.05 * clean_F1_drop
+```
+
+Holdout is allowed only if calibration finds a candidate satisfying:
+
+```text
+clean_F1_drop <= 0.02
+recall_drop_vs_S1 <= 0.02
+IDSW_delta_vs_S1 <= 0
+track_break_delta_vs_S1 <= 0
+rejection_rate_attack >= 0.005
+```
+
+and at least one improvement in FP, failure intensity, or IDF1. Otherwise `selection_status: not_selected` means holdout is blocked.
+
+If no candidate satisfies the primary clean constraint, a fallback candidate may be marked with `selection_status = fallback_clean_003` when `clean_F1_drop <= 0.03`. Holdout is still gated on the error trade-off: reducing FP alone is not enough if FN, IDF1, IDSW, track breaks, or total error intensity degrade.
+
+`soft_reweight` can apply a confidence floor:
+
+```text
+confidence_new = max(soft_conf_floor, confidence * Q_i)
+```
+
+`delayed_hard_filter` rejects only after `Q_i < tau_Q` for `reject_patience` consecutive accepted defense-state updates.

@@ -129,6 +129,7 @@ def fgsm_image_with_diagnostics(
         "grad_l1": float(grad.abs().mean().cpu()),
         "grad_l2": float(torch.linalg.vector_norm(grad).cpu()),
         "grad_linf": float(grad.abs().max().cpu()),
+        "perturb_l1": float(np.abs(real_perturb).mean()),
         "perturb_linf": float(np.abs(real_perturb).max()),
         "perturb_l2": float(np.linalg.norm(real_perturb.reshape(-1))),
         "image_min_clean": float(clean.min()),

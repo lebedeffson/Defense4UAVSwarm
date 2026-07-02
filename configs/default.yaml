@@ -36,8 +36,43 @@ fgsm:
 filtering:
   confidence_grid: [0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80]
   tau_grid: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50]
+  det_tau_grid: [0.05, 0.10, 0.20, 0.30, 0.40, 0.50]
   t_norms: [T_min, T_prod, T_Lukasiewicz]
   alpha: auto
+  preassociation_kinematics: true
+  gamma_assoc: 0.2
+  gamma_assoc_grid: [0.05, 0.10, 0.20, 0.30]
+  k_new_track: 1.0
+  tau_soft_update: 0.05
+  soft_conf_floor: 0.03
+  soft_conf_floor_grid: [0.01, 0.03, 0.05]
+  confirmed_conf_floor: 0.03
+  confirmed_conf_floor_grid: [0.03, 0.05]
+  confirm_age: 3
+  confirm_age_grid: [3, 5]
+  max_confirm_missed: 1
+  tau_existing_grid: [0.05, 0.10, 0.15, 0.20]
+  tau_new_grid: [0.15, 0.20, 0.25, 0.30, 0.35]
+  reject_patience: 1
+  reject_patience_grid: [1, 2, 3]
+  max_missed_frames: 5
+  min_attack_rejection_rate: 0.005
+  k_variant: center
+  k_variants: [center, iou, combined, gate, robust_min]
+  alpha_scale: 1.0
+  alpha_scales: [0.10, 0.15, 0.20, 0.30, 0.40, 0.50, 0.75, 1.00]
+  betas: [0.5, 0.7, 0.9]
+  robust_tau_grid: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50]
+  robust_clean_f1_drop_limit: 0.02
+  robust_clean_f1_drop_fallback: 0.03
+  robust_recall_drop_limit: 0.03
+  robust_score_weights:
+    F1_attack: 0.30
+    IDF1_attack: 0.25
+    ASR_any: -0.15
+    IDSW_rate: -0.15
+    track_break_rate: -0.10
+    clean_F1_drop: -0.05
   tie_eps: 0.01
   s_feature_mode: neutral_single_camera
   recall_drop_limit: 0.10
@@ -63,3 +98,4 @@ outputs:
   figures_dir: outputs/figures
 
 class_groups_file: configs/class_groups.yaml
+class_mapping_file: configs/class_mapping_coco_to_visdrone.yaml

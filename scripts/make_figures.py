@@ -18,7 +18,8 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
 
     atk = df[df["eps"].notna()]
-    for metric in ["F1", "IDF1", "MOTA", "ASR"]:
+    asr_metric = "ASR_det" if "ASR_det" in atk and atk["ASR_det"].notna().any() else "ASR"
+    for metric in ["F1", "IDF1", "MOTA", asr_metric]:
         if metric in atk:
             plt.figure()
             for name, g in atk.groupby(["scenario", "t_norm"], dropna=False):
@@ -30,7 +31,7 @@ def main() -> None:
             plt.savefig(out / f"{metric.lower()}_vs_eps.png", dpi=200)
             plt.close()
 
-    metrics = [m for m in ["F1", "IDF1", "MOTA", "ASR"] if m in atk]
+    metrics = [m for m in ["F1", "IDF1", "MOTA", asr_metric] if m in atk]
     if metrics:
         fig, axes = plt.subplots(2, 2, figsize=(10, 7))
         for ax, metric in zip(axes.ravel(), metrics):
@@ -43,7 +44,7 @@ def main() -> None:
         plt.savefig(out / "metrics_vs_eps.png", dpi=200)
         plt.close(fig)
 
-    s2 = df[df["scenario"] == "S2"]
+    s2 = df[df["scenario"].isin(["S2", "S2_conf"])]
     if len(s2):
         plt.figure()
         for name, g in s2.groupby("t_norm"):
@@ -58,9 +59,9 @@ def main() -> None:
     matrix_path = Path(args.summary).with_name("research_matrix.csv")
     if matrix_path.exists():
         mdf = pd.read_csv(matrix_path)
-        for metric, filename in [("F1", "f1_vs_eps_by_model.png"), ("ASR", "asr_vs_eps_by_model.png")]:
+        for metric, filename in [("F1", "f1_vs_eps_by_model.png"), (asr_metric, "asr_vs_eps_by_model.png")]:
             plt.figure()
-            data = mdf[(mdf["class_group"] == "all") & (mdf["scenario"].isin(["S1", "S_naive", "S2"]))]
+            data = mdf[(mdf["class_group"] == "all") & (mdf["scenario"].isin(["S1", "S_naive", "S2", "S2_conf"]))]
             if metric in data:
                 for key, g in data.groupby(["model_name", "scenario", "t_norm"], dropna=False):
                     plt.plot(g["eps"], g[metric], marker="o", label=str(key))
@@ -72,7 +73,7 @@ def main() -> None:
                 plt.close()
 
         plt.figure()
-        data = mdf[mdf["scenario"].isin(["S1", "S2"])]
+        data = mdf[mdf["scenario"].isin(["S1", "S2", "S2_conf"])]
         if len(data):
             pivot = data.groupby(["class_group", "scenario"])["F1"].max().unstack()
             pivot.plot(kind="bar")

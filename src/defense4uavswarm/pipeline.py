@@ -28,6 +28,7 @@ def run_detection(
     eps: float | None = None,
     limit_sequences: int | None = None,
     sequence_ids: list[str] | None = None,
+    enable_tracking: bool = True,
 ) -> pd.DataFrame:
     from defense4uavswarm.attacks.fgsm import fgsm_image_with_diagnostics
     from defense4uavswarm.detectors.yolo import YoloRunner
@@ -49,7 +50,7 @@ def run_detection(
                 gt_boxes = None
                 if ann is not None and loss_mode == "proxy_conf_box_if_available":
                     gt_boxes = ann[ann.frame_id == rec.frame_id][["x1", "y1", "x2", "y2"]].to_numpy()
-                image_path, _ = fgsm_image_with_diagnostics(
+                image_path, fgsm_diag = fgsm_image_with_diagnostics(
                     rec.image_path,
                     eps,
                     Path(cfg["fgsm"]["cache_dir"]) / loss_mode / model_name / f"eps_{eps}" / rel,
@@ -60,12 +61,33 @@ def run_detection(
                     gt_boxes=gt_boxes,
                     beta=float(cfg.get("fgsm", {}).get("proxy_beta", 1.0)),
                 )
+            else:
+                fgsm_diag = {}
             dets, _ = runner.track_frame(image_path, cfg, scenario, eps or 0.0, rec.sequence_id, rec.frame_id, state)
+            for det in dets:
+                if fgsm_diag:
+                    det["mean_abs_perturbation"] = fgsm_diag.get("perturb_l1") or fgsm_diag.get("mean_abs_perturbation")
+                    det["max_abs_perturbation"] = fgsm_diag.get("perturb_linf")
+                    det["mean_gradient_norm"] = fgsm_diag.get("grad_l1")
+                    det["fgsm_loss_clean"] = fgsm_diag.get("loss_clean")
+                    det["fgsm_loss_adv"] = fgsm_diag.get("loss_adv")
+                    det["fgsm_loss_mode_actual"] = fgsm_diag.get("loss_mode_actual")
             rows.extend(dets)
     df = to_frame(rows)
     df["fgsm_loss"] = cfg.get("fgsm", {}).get("loss", "class_only")
     df = filter_predictions_by_allowed_classes(df, cfg)
-    if len(df) and df["pred_track_id"].isna().all():
+    if len(df) and not enable_tracking:
+        df["pred_track_id"] = None
+        df["k_i"] = 1.0
+        df["track_age"] = 1
+        df["s_i"] = 1.0
+        df["x_i"] = 1.0
+        df["kinematics_enabled"] = False
+        df["tracking_enabled"] = False
+    elif len(df):
+        df["kinematics_enabled"] = True
+        df["tracking_enabled"] = True
+    if enable_tracking and len(df) and df["pred_track_id"].isna().all():
         df = add_simple_tracks(df)
     return df
 
@@ -98,6 +120,12 @@ def evaluate(
     )
     tr = tracking_metrics(gt_eval, pred_eval) if include_tracking else {"MOTA": None, "IDF1": None, "IDSW": None, "tracking_error": None, "track_breaks": None}
     lat = pred["latency_ms"].dropna()
+    accepted = pred_eval[pred_eval["accepted"] == True] if "accepted" in pred_eval else pred_eval
+    num_before = int(len(pred_eval))
+    num_after = int(len(accepted))
+    perturb = pred["mean_abs_perturbation"].dropna() if "mean_abs_perturbation" in pred else []
+    max_perturb = pred["max_abs_perturbation"].dropna() if "max_abs_perturbation" in pred else []
+    grad = pred["mean_gradient_norm"].dropna() if "mean_gradient_norm" in pred else []
     return {
         "model_name": pred["model_name"].dropna().iloc[0] if "model_name" in pred and len(pred["model_name"].dropna()) else None,
         "scenario": scenario,
@@ -105,11 +133,23 @@ def evaluate(
         "class_group": class_group,
         "t_norm": t_norm,
         "tau": tau,
-        "filter_mode": cfg.get("filtering", {}).get("tnorm_filter_mode") if cfg is not None else None,
+        "filter_mode": pred["filter_mode"].dropna().iloc[0] if "filter_mode" in pred and len(pred["filter_mode"].dropna()) else (cfg.get("filtering", {}).get("tnorm_filter_mode") if cfg is not None else None),
+        "k_variant": pred["k_variant"].dropna().iloc[0] if "k_variant" in pred and len(pred["k_variant"].dropna()) else (cfg.get("filtering", {}).get("k_variant") if cfg is not None else None),
+        "alpha_scale": float(pred["alpha_scale"].dropna().iloc[0]) if "alpha_scale" in pred and len(pred["alpha_scale"].dropna()) else (cfg.get("filtering", {}).get("alpha_scale") if cfg is not None else None),
+        "beta": float(pred["beta"].dropna().iloc[0]) if "beta" in pred and len(pred["beta"].dropna()) else None,
         "model_conf": cfg.get("model", {}).get("conf") if cfg is not None else None,
         "class_agnostic_eval": cfg.get("evaluation", {}).get("class_agnostic") if cfg is not None else None,
+        "kinematics_enabled": bool(include_tracking),
+        "tracking_enabled": bool(include_tracking),
+        "num_detections_before_filter": num_before,
+        "num_detections_after_filter": num_after,
+        "num_rejected": num_before - num_after,
+        "rejection_rate": (num_before - num_after) / num_before if num_before else 0.0,
         **d,
         **tr,
+        "mean_abs_perturbation": float(perturb.mean()) if len(perturb) else None,
+        "max_abs_perturbation": float(max_perturb.max()) if len(max_perturb) else None,
+        "mean_gradient_norm": float(grad.mean()) if len(grad) else None,
         "latency_ms": float(lat.mean()) if len(lat) else None,
         "latency_p95_ms": float(lat.quantile(0.95)) if len(lat) else None,
     }
