@@ -85,6 +85,13 @@ filtering:
   tnorm_filter_mode: hard
   new_track_k_neutral_age: 3
 
+recovery:
+  modes: [hold_last, constant_velocity]
+  horizons: [2, 3]
+  decays: [0.80, 0.90]
+  confirm_ages: [3]
+  max_recovered_tracks_per_frame: [10]
+
 evaluation:
   class_agnostic: true
   prediction_class_filter: [person, bicycle, car, motorcycle, bus, truck]

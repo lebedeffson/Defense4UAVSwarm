@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from itertools import product
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -14,6 +15,7 @@ from defense4uavswarm.filtering.tnorms import apply_conf_threshold, apply_tnorm
 from defense4uavswarm.metadata import write_metadata
 from defense4uavswarm.metrics.asr import attack_success_breakdown, attack_success_breakdown_det
 from defense4uavswarm.pipeline import build_threshold_selection, evaluate, load_existing, run_detection, save
+from defense4uavswarm.recovery import run_track_recovery_calibration, write_recovery_reports
 
 
 def selected_models(cfg: dict, names: list[str]) -> list[dict]:
@@ -172,57 +174,78 @@ def run_experiment_matrix(
                 naive = apply_conf_threshold(s1, tau_conf)
                 save(naive, results / f"{task}_{model_name}_s_naive_eps_{eps}.csv")
 
-                s2_specs = defense_specs_for_run(
-                    cfg=mc,
-                    model_name=model_name,
-                    eps=eps,
-                    tau_q=tau_q,
-                    k_variants=k_variants,
-                    filter_modes=filter_modes,
-                    alpha_scales=alpha_scales,
-                    betas=betas,
-                    selected_defense=selected_defense,
-                    calibration=split == "calibration" and task in {"vid", "mot"},
-                )
-                if split == "calibration" and task in {"vid", "mot"}:
-                    cand_rows, chosen = select_robust_defense(gt, s0, s1, mc, model_name, eps, s2_specs, fast_metrics=fast_metrics)
-                    robust_rows.extend(cand_rows)
-                    kinematic_rows.extend(cand_rows)
-                    selected_params.setdefault(model_name, {})[f"eps_{eps}"] = chosen
-                s2_specs_by_name = {spec["name"]: spec for spec in s2_specs}
-                s2_by_norm = {
-                    spec["name"]: apply_tnorm(
-                        s1,
-                        spec["t_norm"],
-                        spec["tau_Q"],
-                        mode=spec["filter_mode"],
-                        k_variant=spec["k_variant"],
-                        alpha_scale=spec["alpha_scale"],
-                        beta=spec["beta"],
-                        preassociation=bool(mc["filtering"].get("preassociation_kinematics", False)) and not is_det,
-                        gamma_assoc=float(spec.get("gamma_assoc", mc["filtering"].get("gamma_assoc", 0.2))),
-                        k_new_track=float(mc["filtering"].get("k_new_track", 1.0)),
-                        tau_soft_update=float(mc["filtering"].get("tau_soft_update", 0.05)),
-                        max_missed_frames=int(mc["filtering"].get("max_missed_frames", 5)),
-                        soft_conf_floor=float(spec.get("soft_conf_floor") or mc["filtering"].get("soft_conf_floor", 0.0)),
-                        reject_patience=int(spec.get("reject_patience", mc["filtering"].get("reject_patience", 1))),
-                        tau_existing=spec.get("tau_existing"),
-                        tau_new=spec.get("tau_new"),
-                        confirm_age=int(spec.get("confirm_age", mc["filtering"].get("confirm_age", 3))),
-                        max_confirm_missed=int(mc["filtering"].get("max_confirm_missed", 1)),
-                        confirmed_conf_floor=float(spec.get("confirmed_conf_floor") or mc["filtering"].get("confirmed_conf_floor", 0.03)),
-                        risk_tau=float(spec.get("risk_tau", mc["filtering"].get("risk_tau_grid", [0.7])[0])),
-                        new_conf_tau=float(spec.get("new_conf_tau", mc["filtering"].get("new_conf_tau_grid", [0.2])[0])),
-                        risk_weights=tuple(mc["filtering"].get("risk_weights", [0.4, 0.3, 0.3])),
-                        penalty_strength=float(spec.get("penalty_strength", mc["filtering"].get("penalty_strength_grid", [0.3])[0])),
-                        min_penalty=float(spec.get("min_penalty", mc["filtering"].get("min_penalty_grid", [0.7])[0])),
-                        max_reject_per_frame=int(spec.get("max_reject_per_frame", mc["filtering"].get("max_reject_per_frame_grid", [1])[0])),
+                s2_by_norm = {}
+                s2_specs_by_name = {}
+                if "s2" in scenarios:
+                    s2_specs = defense_specs_for_run(
+                        cfg=mc,
+                        model_name=model_name,
+                        eps=eps,
+                        tau_q=tau_q,
+                        k_variants=k_variants,
+                        filter_modes=filter_modes,
+                        alpha_scales=alpha_scales,
+                        betas=betas,
+                        selected_defense=selected_defense,
+                        calibration=split == "calibration" and task in {"vid", "mot"},
                     )
-                    for spec in s2_specs
-                }
-                for name, frame in s2_by_norm.items():
-                    suffix = "s2_conf" if is_det else "s2"
-                    save(frame, results / f"{task}_{model_name}_{suffix}_{name}_eps_{eps}.csv")
+                    if split == "calibration" and task in {"vid", "mot"}:
+                        cand_rows, chosen = select_robust_defense(gt, s0, s1, mc, model_name, eps, s2_specs, fast_metrics=fast_metrics)
+                        robust_rows.extend(cand_rows)
+                        kinematic_rows.extend(cand_rows)
+                        selected_params.setdefault(model_name, {})[f"eps_{eps}"] = chosen
+                    s2_specs_by_name = {spec["name"]: spec for spec in s2_specs}
+                    s2_by_norm = {
+                        spec["name"]: apply_tnorm(
+                            s1,
+                            spec["t_norm"],
+                            spec["tau_Q"],
+                            mode=spec["filter_mode"],
+                            k_variant=spec["k_variant"],
+                            alpha_scale=spec["alpha_scale"],
+                            beta=spec["beta"],
+                            preassociation=bool(mc["filtering"].get("preassociation_kinematics", False)) and not is_det,
+                            gamma_assoc=float(spec.get("gamma_assoc", mc["filtering"].get("gamma_assoc", 0.2))),
+                            k_new_track=float(mc["filtering"].get("k_new_track", 1.0)),
+                            tau_soft_update=float(mc["filtering"].get("tau_soft_update", 0.05)),
+                            max_missed_frames=int(mc["filtering"].get("max_missed_frames", 5)),
+                            soft_conf_floor=float(spec.get("soft_conf_floor") or mc["filtering"].get("soft_conf_floor", 0.0)),
+                            reject_patience=int(spec.get("reject_patience", mc["filtering"].get("reject_patience", 1))),
+                            tau_existing=spec.get("tau_existing"),
+                            tau_new=spec.get("tau_new"),
+                            confirm_age=int(spec.get("confirm_age", mc["filtering"].get("confirm_age", 3))),
+                            max_confirm_missed=int(mc["filtering"].get("max_confirm_missed", 1)),
+                            confirmed_conf_floor=float(spec.get("confirmed_conf_floor") or mc["filtering"].get("confirmed_conf_floor", 0.03)),
+                            risk_tau=float(spec.get("risk_tau", mc["filtering"].get("risk_tau_grid", [0.7])[0])),
+                            new_conf_tau=float(spec.get("new_conf_tau", mc["filtering"].get("new_conf_tau_grid", [0.2])[0])),
+                            risk_weights=tuple(mc["filtering"].get("risk_weights", [0.4, 0.3, 0.3])),
+                            penalty_strength=float(spec.get("penalty_strength", mc["filtering"].get("penalty_strength_grid", [0.3])[0])),
+                            min_penalty=float(spec.get("min_penalty", mc["filtering"].get("min_penalty_grid", [0.7])[0])),
+                            max_reject_per_frame=int(spec.get("max_reject_per_frame", mc["filtering"].get("max_reject_per_frame_grid", [1])[0])),
+                        )
+                        for spec in s2_specs
+                    }
+                    for name, frame in s2_by_norm.items():
+                        suffix = "s2_conf" if is_det else "s2"
+                        save(frame, results / f"{task}_{model_name}_{suffix}_{name}_eps_{eps}.csv")
+
+                if "s3_track_recovery" in scenarios and task in {"vid", "mot"}:
+                    rec_cfg = mc.get("recovery", {})
+                    s3, chosen, _ = run_track_recovery_calibration(
+                        gt,
+                        s0,
+                        s1,
+                        mc,
+                        model_name,
+                        eps,
+                        results,
+                        rec_cfg.get("modes", ["hold_last", "constant_velocity"]),
+                        rec_cfg.get("horizons", [2, 3]),
+                        rec_cfg.get("decays", [0.8, 0.9]),
+                        rec_cfg.get("confirm_ages", [3]),
+                        rec_cfg.get("max_recovered_tracks_per_frame", [10]),
+                    )
+                    write_recovery_reports(gt, s0, s1, s3, mc, eps, results)
 
                 for group in class_groups:
                     if "s1" in scenarios:
@@ -250,6 +273,9 @@ def run_experiment_matrix(
                                 m.update(breakdown)
                                 m["ASR_track"] = breakdown["asr_total"]
                             rows.append(matrix_row(m, task, dataset_subset, len(sequences), num_frames, tau_conf))
+                    if "s3_track_recovery" in scenarios and task in {"vid", "mot"}:
+                        m = evaluate(gt, s3, "S3_track_recovery", eps, cfg=mc, class_group=group, include_map=not fast_metrics and group == "all", include_tracking=tracking_enabled and group == "all" and not fast_metrics)
+                        rows.append(matrix_row(m, task, dataset_subset, len(sequences), num_frames, tau_conf))
 
                 if build_ablation:
                     ablation_frames.append(build_ablation_rows(gt, s0, s1, naive, s2_by_norm, mc, model_name, eps, class_groups, detection_only=is_det))
@@ -293,6 +319,21 @@ def run_experiment_matrix(
             "selected_sequences": sequences,
         },
     )
+    if "s3_track_recovery" in scenarios and (results / "selected_defense_params.yaml").exists():
+        with open(results / "selected_defense_params.yaml", "r", encoding="utf-8") as f:
+            selection = yaml.safe_load(f) or {}
+        with open(results / "metadata.json", "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+        metadata.update(
+            {
+                "stage": "v1.6",
+                "scenario": "S3_track_recovery",
+                "selection_status": selection.get("selection_status"),
+                "holdout_allowed": bool(selection.get("holdout_allowed", False)),
+                "holdout_run": False,
+            }
+        )
+        (results / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
 
 
 def defense_specs_for_run(

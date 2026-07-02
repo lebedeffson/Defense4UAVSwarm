@@ -65,6 +65,11 @@ def main() -> None:
     p.add_argument("--augmentation-count", type=int, default=3)
     p.add_argument("--semantic-max-frames", type=int, default=30)
     p.add_argument("--xai-max-per-frame", type=int, default=3)
+    p.add_argument("--recovery-modes", nargs="+", default=None)
+    p.add_argument("--recovery-horizons", nargs="+", type=int, default=None)
+    p.add_argument("--recovery-decays", nargs="+", type=float, default=None)
+    p.add_argument("--confirm-ages", nargs="+", type=int, default=None)
+    p.add_argument("--max-recovered-tracks-per-frame", nargs="+", type=int, default=None)
     args = p.parse_args()
     cfg = load_config(args.config)
     if args.fgsm_loss:
@@ -95,6 +100,16 @@ def main() -> None:
         cfg["filtering"]["min_penalty_grid"] = args.min_penalties
     if args.max_reject_per_frame:
         cfg["filtering"]["max_reject_per_frame_grid"] = args.max_reject_per_frame
+    if args.recovery_modes:
+        cfg.setdefault("recovery", {})["modes"] = args.recovery_modes
+    if args.recovery_horizons:
+        cfg.setdefault("recovery", {})["horizons"] = args.recovery_horizons
+    if args.recovery_decays:
+        cfg.setdefault("recovery", {})["decays"] = args.recovery_decays
+    if args.confirm_ages:
+        cfg.setdefault("recovery", {})["confirm_ages"] = args.confirm_ages
+    if args.max_recovered_tracks_per_frame:
+        cfg.setdefault("recovery", {})["max_recovered_tracks_per_frame"] = args.max_recovered_tracks_per_frame
     cfg.setdefault("semantic", {})["augmentation_max_frames"] = args.semantic_max_frames
     if args.confirm_age:
         cfg["filtering"]["confirm_age_grid"] = args.confirm_age
