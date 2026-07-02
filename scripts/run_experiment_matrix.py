@@ -22,6 +22,7 @@ def main() -> None:
     p.add_argument("--fast-metrics", action="store_true")
     p.add_argument("--skip-ablation", action="store_true")
     p.add_argument("--class-agnostic-eval", choices=["true", "false"], default=None)
+    p.add_argument("--filter-mode", choices=["hard", "soft"], default=None)
     args = p.parse_args()
     cfg = load_config(args.config)
     if args.fgsm_loss:
@@ -30,6 +31,8 @@ def main() -> None:
         cfg["outputs"]["results_dir"] = args.output_dir
     if args.class_agnostic_eval is not None:
         cfg.setdefault("evaluation", {})["class_agnostic"] = args.class_agnostic_eval == "true"
+    if args.filter_mode:
+        cfg["filtering"]["tnorm_filter_mode"] = args.filter_mode
     run_experiment_matrix(
         cfg,
         model_names=args.models,

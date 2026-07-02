@@ -132,7 +132,7 @@ def run_experiment_matrix(
                 naive = apply_conf_threshold(s1, tau_conf)
                 save(naive, results / f"{task}_{model_name}_s_naive_eps_{eps}.csv")
 
-                s2_by_norm = {name: apply_tnorm(s1, name, tau) for name, tau in tau_q.items()}
+                s2_by_norm = {name: apply_tnorm(s1, name, tau, mode=mc["filtering"].get("tnorm_filter_mode", "hard")) for name, tau in tau_q.items()}
                 for name, frame in s2_by_norm.items():
                     save(frame, results / f"{task}_{model_name}_s2_{name}_eps_{eps}.csv")
 

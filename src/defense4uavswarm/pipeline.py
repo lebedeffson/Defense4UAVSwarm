@@ -121,7 +121,16 @@ def build_threshold_selection(gt: pd.DataFrame, s0: pd.DataFrame, cfg: dict) -> 
     tau_q = {}
     for name in cfg["filtering"]["t_norms"]:
         scored = apply_tnorm(s0, name, 0.0)
-        tau, grid = choose_threshold(gt, scored, cfg["filtering"]["tau_grid"], "Q_i", cfg["filtering"]["tie_eps"], class_agnostic=class_agnostic, aliases=groups_cfg.get("aliases", {}))
+        tau, grid = choose_threshold(
+            gt,
+            scored,
+            cfg["filtering"]["tau_grid"],
+            "Q_i",
+            cfg["filtering"]["tie_eps"],
+            class_agnostic=class_agnostic,
+            aliases=groups_cfg.get("aliases", {}),
+            recall_floor=conf_grid[conf_grid["tau"] == tau_conf]["recall"].iloc[0] * (1.0 - float(cfg["filtering"].get("recall_drop_limit", 1.0))),
+        )
         tau_q[name] = tau
         for r in grid.to_dict("records"):
             rows.append({"mode": "S2", "t_norm": name, "tau": r["tau"], "F1": r["F1"], "selected": r["tau"] == tau})
@@ -175,7 +184,7 @@ def run_s0_to_s2(cfg: dict, scenario: str = "s0_s2", eps: float | None = None, l
                 metrics.append(m)
 
             for name, tau in tau_q.items():
-                s2 = apply_tnorm(s1, name, tau)
+                s2 = apply_tnorm(s1, name, tau, mode=cfg["filtering"].get("tnorm_filter_mode", "hard"))
                 save(s2, results / f"s2_tnorm_{name}_eps_{current_eps}.csv")
                 all_s2.append(s2)
                 if scenario in ("s2", "s0_s2"):

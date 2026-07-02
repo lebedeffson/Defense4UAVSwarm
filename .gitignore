@@ -17,3 +17,4 @@ outputs/smoke_visdrone/
 *.onnx
 archive.zip
 VisDrone2019-*.zip
+*.tar.gz

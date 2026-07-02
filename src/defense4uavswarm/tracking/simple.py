@@ -42,18 +42,23 @@ def add_simple_tracks(df: pd.DataFrame, iou_threshold: float = 0.3, max_age: int
                 cx = (row.x1 + row.x2) / 2
                 cy = (row.y1 + row.y2) / 2
                 prev = tracks.get(best_tid)
+                track_age = 1 if prev is None else int(prev.get("age", 1)) + 1
                 if prev is None:
                     k_i = 1.0
                 else:
                     px, py = prev["center"]
                     vx, vy = prev.get("velocity", (0.0, 0.0))
-                    d = math.hypot(cx - (px + vx), cy - (py + vy))
-                    size = max(1.0, math.sqrt(max(1.0, (row.x2 - row.x1) * (row.y2 - row.y1))))
-                    k_i = math.exp(-d / size)
+                    if track_age < 3:
+                        k_i = 1.0
+                    else:
+                        d = math.hypot(cx - (px + vx), cy - (py + vy))
+                        size = max(1.0, math.sqrt(max(1.0, (row.x2 - row.x1) * (row.y2 - row.y1))))
+                        k_i = math.exp(-d / size)
                 velocity = (0.0, 0.0) if prev is None else (cx - prev["center"][0], cy - prev["center"][1])
-                tracks[best_tid] = {"box": box, "frame_id": frame_id, "center": (cx, cy), "velocity": velocity}
+                tracks[best_tid] = {"box": box, "frame_id": frame_id, "center": (cx, cy), "velocity": velocity, "age": track_age}
                 out = row.to_dict()
                 out["pred_track_id"] = best_tid
                 out["k_i"] = k_i
+                out["track_age"] = track_age
                 outputs.append(out)
     return pd.DataFrame(outputs)

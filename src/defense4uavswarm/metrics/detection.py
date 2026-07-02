@@ -160,6 +160,7 @@ def choose_threshold(
     tie_eps: float,
     class_agnostic: bool = True,
     aliases: dict[str, str] | None = None,
+    recall_floor: float | None = None,
 ) -> tuple[float, pd.DataFrame]:
     rows = []
     best_tau, best_f1 = grid[0], -1.0
@@ -167,7 +168,11 @@ def choose_threshold(
         cand = pred.copy()
         cand["accepted"] = cand[score_col] >= tau
         m = precision_recall_f1(gt, cand, include_map=False, class_agnostic=class_agnostic, aliases=aliases)
+        m["recall_floor"] = recall_floor
+        m["passes_recall_floor"] = recall_floor is None or m["recall"] >= recall_floor
         rows.append({"tau": tau, **m})
+        if recall_floor is not None and m["recall"] < recall_floor:
+            continue
         if m["F1"] > best_f1 + tie_eps or abs(m["F1"] - best_f1) < tie_eps and tau < best_tau:
             best_tau, best_f1 = tau, m["F1"]
     return best_tau, pd.DataFrame(rows)

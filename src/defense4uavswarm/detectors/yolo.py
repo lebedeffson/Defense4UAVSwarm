@@ -44,15 +44,18 @@ class YoloRunner:
             pred_id = int(b.id[0]) if b.id is not None else None
             cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
             k_i = 1.0
+            track_age = 1
             if pred_id is not None and pred_id in state:
-                px, py, vx, vy, size = state[pred_id]
-                d = math.hypot(cx - (px + vx), cy - (py + vy))
-                k_i = math.exp(-d / max(1.0, size))
+                px, py, vx, vy, size, prev_age = state[pred_id]
+                track_age = int(prev_age) + 1
+                if track_age >= int(cfg["filtering"].get("new_track_k_neutral_age", 3)):
+                    d = math.hypot(cx - (px + vx), cy - (py + vy))
+                    k_i = math.exp(-d / max(1.0, size))
             if pred_id is not None:
                 prev = state.get(pred_id)
                 vx, vy = (0.0, 0.0) if prev is None else (cx - prev[0], cy - prev[1])
                 size = math.sqrt(max(1.0, (x2 - x1) * (y2 - y1)))
-                state[pred_id] = (cx, cy, vx, vy, size)
+                state[pred_id] = (cx, cy, vx, vy, size, track_age)
             rows.append(
                 {
                     "scenario": scenario,
@@ -72,6 +75,7 @@ class YoloRunner:
                     "confidence": conf,
                     "c_i": conf,
                     "k_i": k_i,
+                    "track_age": track_age,
                     "s_i": 1.0,
                     "x_i": 1.0,
                     "Q_i": None,

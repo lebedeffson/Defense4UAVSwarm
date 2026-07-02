@@ -16,7 +16,7 @@ def t_norm(name: str, c: float, k: float, s: float = 1.0, x: float = 1.0) -> flo
     raise ValueError(f"Unknown T-norm: {name}")
 
 
-def apply_tnorm(df, name: str, tau: float):
+def apply_tnorm(df, name: str, tau: float, mode: str = "hard"):
     out = df.copy()
     out["Q_i"] = [
         t_norm(name, float(r.c_i), float(r.k_i), float(r.s_i), float(r.x_i))
@@ -24,7 +24,14 @@ def apply_tnorm(df, name: str, tau: float):
     ]
     out["t_norm"] = name
     out["tau"] = tau
-    out["accepted"] = out["Q_i"] >= tau
+    out["filter_mode"] = mode
+    if mode == "soft":
+        out["confidence_original"] = out["confidence"]
+        out["confidence"] = out["confidence"].astype(float) * out["Q_i"].astype(float)
+        out["c_i"] = out["confidence"]
+        out["accepted"] = out["confidence"] >= tau
+    else:
+        out["accepted"] = out["Q_i"] >= tau
     return out
 
 
