@@ -6,11 +6,13 @@ import argparse
 from defense4uavswarm.config import load_config
 from defense4uavswarm.matrix import run_experiment_matrix
 from defense4uavswarm.semantic import build_semantic_diagnostics
+from defense4uavswarm.swarm_tnorm import run_swarm_tnorm_smoke
 
 
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--config", default="configs/default.yaml")
+    p.add_argument("--swarm-config", default=None)
     p.add_argument("--models", nargs="+", default=["yolov8n", "yolov8s"])
     p.add_argument("--tasks", nargs="+", default=["vid"])
     p.add_argument("--eps", nargs="+", type=float, default=[0.004, 0.008])
@@ -43,6 +45,7 @@ def main() -> None:
     ]
     p.add_argument("--filter-mode", choices=filter_choices, default=None)
     p.add_argument("--filter-modes", nargs="+", choices=filter_choices, default=None)
+    p.add_argument("--t-norms", nargs="+", default=None)
     p.add_argument("--k-variants", nargs="+", choices=["center", "iou", "combined", "gate", "acc", "robust_min"], default=None)
     p.add_argument("--alpha-scales", nargs="+", type=float, default=None)
     p.add_argument("--gamma-assoc", nargs="+", type=float, default=None)
@@ -145,6 +148,20 @@ def main() -> None:
     betas = None
     if args.betas is not None:
         betas = [None if str(x).lower() in {"none", "null", "off"} else float(x) for x in args.betas]
+    if "swarm_vid" in args.tasks:
+        if not args.swarm_config:
+            raise SystemExit("--swarm-config is required for task swarm_vid")
+        run_swarm_tnorm_smoke(
+            args.swarm_config,
+            args.split_config or "configs/vid_split.yaml",
+            args.split or "calibration",
+            args.eps,
+            args.scenarios,
+            args.t_norms or ["min", "prod", "lukasiewicz"],
+            cfg["outputs"]["results_dir"],
+            args.limit_sequences,
+        )
+        return
     existing_semantic_inputs = (
         args.semantic_diagnostics
         and args.scenarios == ["s1"]
