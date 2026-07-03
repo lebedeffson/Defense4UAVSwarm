@@ -13,6 +13,7 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--config", default="configs/default.yaml")
     p.add_argument("--swarm-config", default=None)
+    p.add_argument("--pseudo-attack-config", default=None)
     p.add_argument("--models", nargs="+", default=["yolov8n", "yolov8s"])
     p.add_argument("--tasks", nargs="+", default=["vid"])
     p.add_argument("--eps", nargs="+", type=float, default=[0.004, 0.008])
@@ -164,6 +165,7 @@ def main() -> None:
             xai_method=args.xai_method,
             xai_max_per_frame=args.xai_max_per_frame,
             semantic_max_frames=args.semantic_max_frames,
+            pseudo_attack_config=args.pseudo_attack_config,
         )
         return
     existing_semantic_inputs = (

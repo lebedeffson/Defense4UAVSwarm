@@ -1,0 +1,47 @@
+attack_model:
+  name: pseudo_swarm_hard_errors_v2
+  seed: 42
+  apply_to_split: calibration
+
+  enabled_error_types:
+    - high_conf_fp
+    - bbox_shift_tp
+    - agent_specific_drop
+    - class_confusion
+    - inter_agent_misalignment
+
+  high_conf_fp:
+    enabled: true
+    per_frame_rate: 0.10
+    confidence_range: [0.55, 0.90]
+    size_source: matched_gt_distribution
+    placement:
+      mode: near_existing_objects
+      max_iou_with_gt: 0.20
+      min_distance_from_gt_center: 0.5
+
+  bbox_shift_tp:
+    enabled: true
+    target_fraction: 0.15
+    shift_ratio_range: [0.15, 0.40]
+    scale_ratio_range: [0.80, 1.20]
+    confidence_keep_mode: keep_or_slightly_reduce
+    confidence_multiplier_range: [0.80, 1.00]
+
+  agent_specific_drop:
+    enabled: true
+    target_fraction: 0.10
+    affected_agents: random_one_agent
+    drop_only_if_visible_in_other_agent: true
+
+  class_confusion:
+    enabled: true
+    target_fraction: 0.05
+    compatible_classes_only: true
+    confidence_multiplier_range: [0.85, 1.00]
+
+  inter_agent_misalignment:
+    enabled: true
+    target_fraction: 0.10
+    affected_agents: random_one_agent
+    bbox_shift_ratio_range: [0.10, 0.30]

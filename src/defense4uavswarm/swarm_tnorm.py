@@ -25,6 +25,7 @@ def run_swarm_tnorm_smoke(
     xai_method: str = "eigencam",
     xai_max_per_frame: int = 5,
     semantic_max_frames: int | None = None,
+    pseudo_attack_config: str | Path | None = None,
 ) -> None:
     swarm_cfg = _load_yaml(swarm_config)
     root = Path(swarm_cfg["output_root"]) / split
@@ -40,17 +41,18 @@ def run_swarm_tnorm_smoke(
     frame_index = frame_index[frame_index["sequence_id"].isin(sequences)].copy()
     ds = VisDroneDataset(swarm_cfg["source_root"], "val", subset_hint="VID")
     gt = ds.all_annotations(sequences)
-    detections = _pseudo_detections(gt, frame_index)
+    clean_detections = _pseudo_detections(gt, frame_index)
+    detections = clean_detections
+    attack_events = pd.DataFrame()
+    attack_cfg = _load_yaml(pseudo_attack_config) if pseudo_attack_config else {}
+    if attack_cfg:
+        detections, attack_events = inject_pseudo_attack(detections, attack_cfg)
+        attack_events.to_csv(out / "attack_event_audit.csv", index=False)
+        attack_event_summary(attack_events).to_csv(out / "attack_event_summary.csv", index=False)
+    clean_features, _ = compute_inter_agent_consistency(clean_detections, frame_index, iou_min=0.3, s_missing_policy="neutral")
+    clean_features = prepare_features(clean_features, eps_values)
     features, matches = compute_inter_agent_consistency(detections, frame_index, iou_min=0.3, s_missing_policy="neutral")
-    features["scenario"] = "S1_fgsm"
-    features["model_name"] = "pseudo_yolo"
-    features["eps"] = eps_values[0] if eps_values else 0.0
-    features = add_kinematics(features)
-    features["k_i"] = features["k_i_selected"]
-    features["x_i"] = 1.0
-    features["x_i_available"] = False
-    features["xai_called"] = False
-    features["xai_method"] = None
+    features = prepare_features(features, eps_values)
     xai_audit = pd.DataFrame()
     xai_summary = pd.DataFrame()
     if any(s.lower() in {"s3_tnorm_xai", "s3"} for s in scenarios):
@@ -61,15 +63,16 @@ def run_swarm_tnorm_smoke(
     threshold_rows = []
     feature_frames = []
     total_frames = int(frame_index[["sequence_id", "frame_id"]].drop_duplicates().shape[0])
+    expected_gt = int((clean_features["track_id"] != -1).sum())
     for scenario in scenarios:
         if scenario.lower() in {"s0", "s0_clean", "s1", "s1_fgsm"}:
-            frame = features.copy()
+            frame = clean_features.copy() if scenario.lower().startswith("s0") else features.copy()
             frame["scenario"] = "S0_clean" if scenario.lower().startswith("s0") else "S1_fgsm"
             frame["Q_i"] = frame["c_i"]
             frame["t_norm"] = None
             frame["tau_Q"] = None
             frame["accepted"] = True
-            rows.append(_summary(frame, str(frame["scenario"].iloc[0]), None, None, total_frames))
+            rows.append(_summary(frame, str(frame["scenario"].iloc[0]), None, None, total_frames, expected_gt))
             feature_frames.append(frame)
         elif scenario.lower() in {"s_naive", "snaive"}:
             for tau in tau_conf_grid:
@@ -79,7 +82,7 @@ def run_swarm_tnorm_smoke(
                 frame["t_norm"] = "confidence"
                 frame["tau_Q"] = tau
                 frame["accepted"] = frame["Q_i"] >= tau
-                rows.append(_summary(frame, "S_naive", "confidence", tau, total_frames))
+                rows.append(_summary(frame, "S_naive", "confidence", tau, total_frames, expected_gt))
                 feature_frames.append(frame)
                 threshold_rows.append({"scenario": "S_naive", "t_norm": "confidence", "tau_Q": tau, "selected": False})
         elif scenario.lower() in {"s2_tnorm_no_xai", "s2"}:
@@ -92,7 +95,7 @@ def run_swarm_tnorm_smoke(
                     frame["tau_Q"] = tau
                     frame["Q_i"] = _q(frame, norm)
                     frame["accepted"] = frame["Q_i"] >= tau
-                    rows.append(_summary(frame, "S2_tnorm_no_xai", norm, tau, total_frames))
+                    rows.append(_summary(frame, "S2_tnorm_no_xai", norm, tau, total_frames, expected_gt))
                     feature_frames.append(frame)
                     threshold_rows.append({"scenario": "S2_tnorm_no_xai", "t_norm": norm, "tau_Q": tau, "selected": False})
         elif scenario.lower() in {"s3_tnorm_xai", "s3"}:
@@ -104,7 +107,7 @@ def run_swarm_tnorm_smoke(
                     frame["tau_Q"] = tau
                     frame["Q_i"] = _q(frame, norm)
                     frame["accepted"] = frame["Q_i"] >= tau
-                    rows.append(_summary(frame, "S3_tnorm_xai", norm, tau, total_frames))
+                    rows.append(_summary(frame, "S3_tnorm_xai", norm, tau, total_frames, expected_gt))
                     feature_frames.append(frame)
                     threshold_rows.append({"scenario": "S3_tnorm_xai", "t_norm": norm, "tau_Q": tau, "selected": False})
         elif scenario.lower() in {"s3_safe_recovery", "s4_hybrid"}:
@@ -135,7 +138,8 @@ def run_swarm_tnorm_smoke(
     summary.to_csv(out / "research_matrix.csv", index=False)
     threshold.to_csv(out / "threshold_selection.csv", index=False)
     summary[summary["scenario"].isin(["S2_tnorm_no_xai", "S3_tnorm_xai", "S4_hybrid"])].to_csv(out / "tnorm_comparison.csv", index=False)
-    build_ablation(features, total_frames).to_csv(out / "ablation_summary.csv", index=False)
+    build_ablation(features, total_frames, expected_gt).to_csv(out / "ablation_summary.csv", index=False)
+    error_type_breakdown(summary, attack_events).to_csv(out / "error_type_breakdown.csv", index=False)
     summary.to_csv(out / "robustness_summary.csv", index=False)
     write_selected_params(out / "selected_params.yaml", selected)
     (out / "metadata.json").write_text(
@@ -163,6 +167,9 @@ def run_swarm_tnorm_smoke(
                 "xai_not_yet_final_filter": bool(len(xai_audit)),
                 "x_i_neutral_when_not_called": 1.0,
                 "s_missing_policy": "neutral",
+                "attack_model_type": "controlled detection-level pseudo attack" if attack_cfg else None,
+                "attack_model_name": attack_cfg.get("attack_model", {}).get("name") if attack_cfg else None,
+                "pseudo_attack_config": str(pseudo_attack_config) if pseudo_attack_config else None,
                 "s3_safe_recovery_status": "not implemented for swarm_vid pseudo-swarm in v2.5",
                 "s4_hybrid_status": "not implemented for swarm_vid pseudo-swarm in v2.5",
             },
@@ -272,6 +279,22 @@ def apply_xai_smoke(features: pd.DataFrame, frame_index: pd.DataFrame, method: s
         ]
     )
     return out, audit, summary
+
+
+def prepare_features(features: pd.DataFrame, eps_values: list[float]) -> pd.DataFrame:
+    out = features.copy()
+    if "eval_is_tp" not in out:
+        out["eval_is_tp"] = out["track_id"] != -1
+    out["scenario"] = "S1_fgsm"
+    out["model_name"] = "pseudo_yolo"
+    out["eps"] = eps_values[0] if eps_values else 0.0
+    out = add_kinematics(out)
+    out["k_i"] = out["k_i_selected"]
+    out["x_i"] = 1.0
+    out["x_i_available"] = False
+    out["xai_called"] = False
+    out["xai_method"] = None
+    return out
 
 
 def xai_score_auc(audit: pd.DataFrame) -> pd.DataFrame:
@@ -413,11 +436,12 @@ def _q(frame: pd.DataFrame, norm: str) -> pd.Series:
     raise ValueError(f"Unknown t-norm: {norm}")
 
 
-def _summary(frame: pd.DataFrame, scenario: str, norm: str | None, tau: float | None, num_frames: int) -> dict:
-    total_gt = int((frame["track_id"] != -1).sum())
+def _summary(frame: pd.DataFrame, scenario: str, norm: str | None, tau: float | None, num_frames: int, expected_gt: int | None = None) -> dict:
+    total_gt = int(expected_gt if expected_gt is not None else (frame["track_id"] != -1).sum())
     accepted = frame["accepted"].astype(bool)
-    tp = int((accepted & (frame["track_id"] != -1)).sum())
-    fp = int((accepted & (frame["track_id"] == -1)).sum())
+    eval_tp = frame["eval_is_tp"].astype(bool) if "eval_is_tp" in frame else frame["track_id"] != -1
+    tp = int((accepted & eval_tp).sum())
+    fp = int((accepted & ~eval_tp).sum())
     fn = max(0, total_gt - tp)
     precision = tp / max(1, tp + fp)
     recall = tp / max(1, tp + fn)
@@ -561,7 +585,7 @@ def select_params(summary: pd.DataFrame, threshold: pd.DataFrame) -> dict:
     }
 
 
-def build_ablation(features: pd.DataFrame, num_frames: int) -> pd.DataFrame:
+def build_ablation(features: pd.DataFrame, num_frames: int, expected_gt: int | None = None) -> pd.DataFrame:
     variants = {
         "c_only": ["c_i"],
         "c_k": ["c_i", "k_i"],
@@ -577,7 +601,7 @@ def build_ablation(features: pd.DataFrame, num_frames: int) -> pd.DataFrame:
         frame["scenario"] = name
         frame["Q_i"] = frame[cols].min(axis=1)
         frame["accepted"] = frame["Q_i"] >= 0.30
-        row = _summary(frame, name, "min", 0.30, num_frames)
+        row = _summary(frame, name, "min", 0.30, num_frames, expected_gt)
         row["variant"] = name
         row["features_used"] = ",".join(cols)
         row["interpretation"] = "pseudo-swarm calibration ablation"
@@ -587,6 +611,227 @@ def build_ablation(features: pd.DataFrame, num_frames: int) -> pd.DataFrame:
 
 def write_selected_params(path: Path, selected: dict) -> None:
     path.write_text(yaml.safe_dump(selected, sort_keys=False, allow_unicode=True), encoding="utf-8")
+
+
+def inject_pseudo_attack(detections: pd.DataFrame, attack_cfg: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
+    cfg = attack_cfg.get("attack_model", attack_cfg)
+    rng = np.random.default_rng(int(cfg.get("seed", 42)))
+    out = detections.copy().reset_index(drop=True)
+    out["source_error_type"] = "clean_tp"
+    out["is_corrupted"] = False
+    out["dropped_by_attack"] = False
+    out["eval_is_tp"] = out["track_id"] != -1
+    events: list[dict] = []
+    max_det_id = int(out["det_id"].max()) if len(out) else 0
+    enabled = set(cfg.get("enabled_error_types", []))
+
+    if "bbox_shift_tp" in enabled and cfg.get("bbox_shift_tp", {}).get("enabled", False):
+        frac = float(cfg["bbox_shift_tp"].get("target_fraction", 0.15))
+        idxs = sample_tp_indices(out, frac, rng)
+        shift_lo, shift_hi = cfg["bbox_shift_tp"].get("shift_ratio_range", [0.15, 0.40])
+        conf_lo, conf_hi = cfg["bbox_shift_tp"].get("confidence_multiplier_range", [0.80, 1.00])
+        for idx in idxs:
+            before = out.loc[idx].copy()
+            box = row_box(before)
+            ratio = float(rng.uniform(shift_lo, shift_hi))
+            dx = rng.choice([-1.0, 1.0]) * box_w(box) * ratio
+            dy = rng.choice([-1.0, 1.0]) * box_h(box) * ratio
+            out.loc[idx, ["x1", "y1", "x2", "y2"]] = [box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy]
+            out.loc[idx, "confidence"] = float(out.loc[idx, "confidence"]) * float(rng.uniform(conf_lo, conf_hi))
+            out.loc[idx, "eval_is_tp"] = _iou(row_box(before), row_box(out.loc[idx])) >= 0.5
+            out.loc[idx, "source_error_type"] = "bbox_shift_tp"
+            out.loc[idx, "is_corrupted"] = True
+            events.append(event_row("bbox_shift_tp", before, out.loc[idx]))
+
+    if "inter_agent_misalignment" in enabled and cfg.get("inter_agent_misalignment", {}).get("enabled", False):
+        frac = float(cfg["inter_agent_misalignment"].get("target_fraction", 0.10))
+        idxs = sample_one_agent_track_indices(out, frac, rng)
+        shift_lo, shift_hi = cfg["inter_agent_misalignment"].get("bbox_shift_ratio_range", [0.10, 0.30])
+        for idx in idxs:
+            before = out.loc[idx].copy()
+            box = row_box(before)
+            ratio = float(rng.uniform(shift_lo, shift_hi))
+            dx = rng.choice([-1.0, 1.0]) * box_w(box) * ratio
+            dy = rng.choice([-1.0, 1.0]) * box_h(box) * ratio
+            out.loc[idx, ["x1", "y1", "x2", "y2"]] = [box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy]
+            out.loc[idx, "source_error_type"] = "inter_agent_misalignment"
+            out.loc[idx, "is_corrupted"] = True
+            out.loc[idx, "eval_is_tp"] = _iou(row_box(before), row_box(out.loc[idx])) >= 0.5
+            events.append(event_row("inter_agent_misalignment", before, out.loc[idx], is_agent_specific=True))
+
+    if "class_confusion" in enabled and cfg.get("class_confusion", {}).get("enabled", False):
+        frac = float(cfg["class_confusion"].get("target_fraction", 0.05))
+        idxs = sample_tp_indices(out, frac, rng)
+        conf_lo, conf_hi = cfg["class_confusion"].get("confidence_multiplier_range", [0.85, 1.00])
+        for idx in idxs:
+            before = out.loc[idx].copy()
+            new_class = confused_class(int(before["class_id"]))
+            out.loc[idx, "class_id"] = new_class
+            out.loc[idx, "class_name"] = VISDRONE_CLASSES.get(new_class, "unknown")
+            out.loc[idx, "confidence"] = float(out.loc[idx, "confidence"]) * float(rng.uniform(conf_lo, conf_hi))
+            out.loc[idx, "source_error_type"] = "class_confusion"
+            out.loc[idx, "is_corrupted"] = True
+            out.loc[idx, "eval_is_tp"] = False
+            events.append(event_row("class_confusion", before, out.loc[idx]))
+
+    if "agent_specific_drop" in enabled and cfg.get("agent_specific_drop", {}).get("enabled", False):
+        frac = float(cfg["agent_specific_drop"].get("target_fraction", 0.10))
+        idxs = sample_one_agent_track_indices(out, frac, rng)
+        for idx in idxs:
+            before = out.loc[idx].copy()
+            out.loc[idx, "dropped_by_attack"] = True
+            out.loc[idx, "source_error_type"] = "agent_specific_drop"
+            out.loc[idx, "is_corrupted"] = True
+            events.append(event_row("agent_specific_drop", before, None, is_agent_specific=True, is_dropped=True))
+
+    if "high_conf_fp" in enabled and cfg.get("high_conf_fp", {}).get("enabled", False):
+        fp_cfg = cfg["high_conf_fp"]
+        rate = float(fp_cfg.get("per_frame_rate", 0.10))
+        conf_lo, conf_hi = fp_cfg.get("confidence_range", [0.55, 0.90])
+        frame_keys = out[["sequence_id", "frame_id", "agent_id"]].drop_duplicates()
+        for rec in frame_keys.itertuples(index=False):
+            if rng.random() > rate:
+                continue
+            group = out[(out.sequence_id == rec.sequence_id) & (out.frame_id == rec.frame_id) & (out.agent_id == rec.agent_id) & (out.track_id != -1)]
+            if group.empty:
+                continue
+            base = group.sample(1, random_state=int(rng.integers(0, 2**31 - 1))).iloc[0]
+            box = make_fp_box(base, group, rng)
+            max_det_id += 1
+            row = base.copy()
+            row["det_id"] = max_det_id
+            row["track_id"] = -1
+            row["confidence"] = float(rng.uniform(conf_lo, conf_hi))
+            row[["x1", "y1", "x2", "y2"]] = box
+            row["source_error_type"] = "high_conf_fp"
+            row["is_corrupted"] = True
+            row["dropped_by_attack"] = False
+            row["eval_is_tp"] = False
+            out = pd.concat([out, pd.DataFrame([row])], ignore_index=True)
+            events.append(event_row("high_conf_fp", None, row, is_high_conf_fp=True))
+
+    out = out[out["dropped_by_attack"] == False].copy()
+    return out.reset_index(drop=True), pd.DataFrame(events)
+
+
+def sample_tp_indices(frame: pd.DataFrame, fraction: float, rng: np.random.Generator) -> list[int]:
+    idxs = frame.index[(frame["track_id"] != -1) & (frame.get("dropped_by_attack", False) == False)].to_numpy()
+    n = min(len(idxs), int(round(len(idxs) * fraction)))
+    return sorted(rng.choice(idxs, size=n, replace=False).tolist()) if n > 0 else []
+
+
+def sample_one_agent_track_indices(frame: pd.DataFrame, fraction: float, rng: np.random.Generator) -> list[int]:
+    keys = frame[frame["track_id"] != -1].groupby(["sequence_id", "frame_id", "track_id"]).filter(lambda g: g["agent_id"].nunique() > 1)
+    groups = list(keys.groupby(["sequence_id", "frame_id", "track_id"]).groups.values())
+    n = min(len(groups), int(round(len(groups) * fraction)))
+    if n <= 0:
+        return []
+    chosen = rng.choice(np.arange(len(groups)), size=n, replace=False)
+    return [int(rng.choice(list(groups[i]))) for i in chosen]
+
+
+def confused_class(class_id: int) -> int:
+    return {1: 2, 2: 1, 3: 10, 10: 3}.get(class_id, 2 if class_id != 2 else 1)
+
+
+def make_fp_box(base: pd.Series, group: pd.DataFrame, rng: np.random.Generator) -> tuple[float, float, float, float]:
+    box = row_box(base)
+    w, h = box_w(box), box_h(box)
+    cx = (box[0] + box[2]) / 2.0 + rng.choice([-1.0, 1.0]) * w * float(rng.uniform(1.2, 2.0))
+    cy = (box[1] + box[3]) / 2.0 + rng.choice([-1.0, 1.0]) * h * float(rng.uniform(1.2, 2.0))
+    for _ in range(20):
+        candidate = (cx - w / 2.0, cy - h / 2.0, cx + w / 2.0, cy + h / 2.0)
+        if max(_iou(candidate, row_box(r)) for _, r in group.iterrows()) < 0.20:
+            return candidate
+        cx += rng.choice([-1.0, 1.0]) * w
+        cy += rng.choice([-1.0, 1.0]) * h
+    return (box[2] + w, box[3] + h, box[2] + 2 * w, box[3] + 2 * h)
+
+
+def event_row(event_type: str, before: pd.Series | None, after: pd.Series | None, is_high_conf_fp: bool = False, is_agent_specific: bool = False, is_dropped: bool = False) -> dict:
+    src = after if after is not None else before
+    before_box = row_box(before) if before is not None else None
+    after_box = row_box(after) if after is not None else None
+    iou_after = 0.0 if is_high_conf_fp or after is None or before is None else _iou(before_box, after_box)
+    return {
+        "sequence_id": src["sequence_id"],
+        "frame_id": int(src["frame_id"]),
+        "agent_id": src["agent_id"],
+        "event_type": event_type,
+        "original_det_id": None if before is None else int(before["det_id"]),
+        "new_det_id": None if after is None else int(after["det_id"]),
+        "gt_id": None if src["track_id"] == -1 else int(src["track_id"]),
+        "class_before": None if before is None else before.get("class_name"),
+        "class_after": None if after is None else after.get("class_name"),
+        "confidence_before": None if before is None else float(before["confidence"]),
+        "confidence_after": None if after is None else float(after["confidence"]),
+        "bbox_before": None if before_box is None else json.dumps(list(before_box)),
+        "bbox_after": None if after_box is None else json.dumps(list(after_box)),
+        "iou_before_gt": 1.0 if before is not None and before["track_id"] != -1 else 0.0,
+        "iou_after_gt": iou_after,
+        "is_high_conf_fp": is_high_conf_fp,
+        "is_shifted_tp": event_type == "bbox_shift_tp",
+        "is_dropped_tp": is_dropped,
+        "is_class_confused": event_type == "class_confusion",
+        "is_agent_specific": is_agent_specific,
+    }
+
+
+def attack_event_summary(events: pd.DataFrame) -> pd.DataFrame:
+    if events.empty:
+        return pd.DataFrame(columns=["event_type", "num_events"])
+    rows = []
+    for event_type, group in events.groupby("event_type", sort=False):
+        rows.append(
+            {
+                "event_type": event_type,
+                "num_events": len(group),
+                "mean_confidence_before": float(group["confidence_before"].dropna().mean()) if group["confidence_before"].notna().any() else None,
+                "mean_confidence_after": float(group["confidence_after"].dropna().mean()) if group["confidence_after"].notna().any() else None,
+                "mean_iou_before_gt": float(group["iou_before_gt"].dropna().mean()),
+                "mean_iou_after_gt": float(group["iou_after_gt"].dropna().mean()),
+                "num_high_conf": int((group["confidence_after"].fillna(0) >= 0.5).sum()),
+                "num_agent_specific": int(group["is_agent_specific"].sum()),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def error_type_breakdown(summary: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
+    if events.empty:
+        return pd.DataFrame(columns=["error_type", "scenario", "TP", "FP", "FN", "F1", "IDF1", "num_events", "num_fixed", "num_missed", "num_over_filtered"])
+    rows = []
+    counts = events["event_type"].value_counts().to_dict()
+    for event_type, num in counts.items():
+        for _, row in summary[summary["scenario"].isin(["S1_fgsm", "S_naive", "S2_tnorm_no_xai", "S3_tnorm_xai"])].iterrows():
+            rows.append(
+                {
+                    "error_type": event_type,
+                    "scenario": row["scenario"],
+                    "TP": row.get("TP"),
+                    "FP": row.get("FP"),
+                    "FN": row.get("FN"),
+                    "F1": row.get("F1"),
+                    "IDF1": row.get("IDF1"),
+                    "num_events": int(num),
+                    "num_fixed": None,
+                    "num_missed": None,
+                    "num_over_filtered": None,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def row_box(row: pd.Series) -> tuple[float, float, float, float]:
+    return (float(row["x1"]), float(row["y1"]), float(row["x2"]), float(row["y2"]))
+
+
+def box_w(box: tuple[float, float, float, float]) -> float:
+    return max(1.0, box[2] - box[0])
+
+
+def box_h(box: tuple[float, float, float, float]) -> float:
+    return max(1.0, box[3] - box[1])
 
 
 def _load_yaml(path: str | Path) -> dict:
