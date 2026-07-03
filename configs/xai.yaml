@@ -1,0 +1,8 @@
+enabled: false
+method: eigencam
+fallback_method: eigencam
+c_low: 0.5
+sigma_k: 0.3
+sigma_s: 0.3
+max_per_frame: 5
+missing_policy: neutral

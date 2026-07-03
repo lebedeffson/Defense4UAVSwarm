@@ -1,0 +1,8 @@
+t_norms:
+  - min
+  - prod
+  - lukasiewicz
+tau_Q_grid: [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50]
+tau_conf_grid: [0.10, 0.20, 0.30, 0.40, 0.50, 0.60]
+s_missing_policy: neutral
+inter_agent_iou_min: [0.30, 0.40, 0.50]
