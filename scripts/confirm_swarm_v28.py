@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -46,7 +47,12 @@ def main() -> None:
         out["selected_candidate"] = scenario == "S2_tnorm_soft"
         rows.append(out)
     delta = pd.DataFrame(rows)
-    delta.to_csv(root / "full_calibration_delta_vs_s_naive.csv", index=False)
+    split = "calibration"
+    metadata_path = root / "metadata.json"
+    if metadata_path.exists():
+        split = json.loads(metadata_path.read_text(encoding="utf-8")).get("split", split)
+    delta_name = "holdout_delta_vs_s_naive.csv" if split == "holdout" else "full_calibration_delta_vs_s_naive.csv"
+    delta.to_csv(root / delta_name, index=False)
 
     candidate = delta[delta["scenario"] == "S2_tnorm_soft"]
     if candidate.empty:
@@ -61,9 +67,11 @@ def main() -> None:
         fn_delta_pct = cand["FN_delta_vs_S_naive"] / max(1, naive["FN"])
         strict = cand["FN_delta_vs_S_naive"] <= 0 and cand["FP_delta_vs_S_naive"] < 0 and cand["F1_delta_vs_S_naive"] >= 0
         soft = fn_delta_pct <= 0.02 and cand["FP_delta_vs_S_naive"] < 0 and cand["F1_delta_vs_S_naive"] >= -0.001
+        source_stage = "v2.9_holdout" if split == "holdout" else "v2.8_full_calibration"
         selected = {
             "selection_status": "selected" if strict else ("tradeoff_selected" if soft else "not_selected"),
             "holdout_allowed": bool(strict or soft),
+            "success_flag": bool(strict or soft) if split == "holdout" else None,
             "selected_scenario": "S2_tnorm_soft",
             "selected_t_norm": "min",
             "selected_reweight_mode": "multiplicative_floor",
@@ -71,9 +79,17 @@ def main() -> None:
             "selected_q_hard_min": 0.0,
             "selected_new_track_threshold": 0.4,
             "selected_existing_track_threshold": 0.05,
-            "source_stage": "v2.8_full_calibration",
-            "reason": "full_calibration_confirms_fp_reduction_without_recall_loss" if strict else (
-                "full_calibration_tradeoff_candidate" if soft else "compact_calibration_did_not_generalize"
+            "source_stage": source_stage,
+            "reason": (
+                "holdout_confirms_fp_reduction_without_recall_loss"
+                if split == "holdout" and strict
+                else "holdout_tradeoff_candidate"
+                if split == "holdout" and soft
+                else "full_calibration_confirms_fp_reduction_without_recall_loss"
+                if strict
+                else "full_calibration_tradeoff_candidate"
+                if soft
+                else "compact_calibration_did_not_generalize"
             ),
             "FP_delta_vs_S_naive": int(cand["FP_delta_vs_S_naive"]),
             "FN_delta_vs_S_naive": int(cand["FN_delta_vs_S_naive"]),

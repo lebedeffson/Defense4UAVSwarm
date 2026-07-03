@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +27,12 @@ def run_swarm_tnorm_smoke(
     xai_max_per_frame: int = 5,
     semantic_max_frames: int | None = None,
     pseudo_attack_config: str | Path | None = None,
+    swarm_root: str | Path | None = None,
+    use_selected_params: str | Path | None = None,
+    sequence_batch_size: int | None = None,
+    min_free_disk_gb: float | None = None,
+    max_temp_gb: float | None = None,
+    cleanup_temp: bool = False,
     reweight_modes: list[str] | None = None,
     q_floors: list[float] | None = None,
     gammas: list[float] | None = None,
@@ -34,12 +41,31 @@ def run_swarm_tnorm_smoke(
     existing_track_thresholds: list[float] | None = None,
 ) -> None:
     swarm_cfg = _load_yaml(swarm_config)
-    root = Path(swarm_cfg["output_root"]) / split
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    disk_before = disk_report(Path.cwd())
+    if min_free_disk_gb is not None:
+        free_gb = shutil.disk_usage(Path.cwd()).free / (1024**3)
+        if free_gb < min_free_disk_gb:
+            raise RuntimeError(f"Not enough free disk: {free_gb:.1f}G < required {min_free_disk_gb:.1f}G")
+    root = Path(swarm_root) if swarm_root else Path(swarm_cfg["output_root"]) / split
     frame_index_path = root / "metadata" / "frame_index.csv"
     if not frame_index_path.exists():
         raise FileNotFoundError(f"Build pseudo-swarm first: missing {frame_index_path}")
-    out = Path(output_dir)
-    out.mkdir(parents=True, exist_ok=True)
+    selected_cfg = _load_yaml(use_selected_params) if use_selected_params else {}
+    if selected_cfg:
+        if selected_cfg.get("selected_t_norm"):
+            t_norms = [selected_cfg["selected_t_norm"]]
+        if selected_cfg.get("selected_reweight_mode"):
+            reweight_modes = [selected_cfg["selected_reweight_mode"]]
+        if selected_cfg.get("selected_q_floor") is not None:
+            q_floors = [float(selected_cfg["selected_q_floor"])]
+        if selected_cfg.get("selected_q_hard_min") is not None:
+            q_hard_mins = [float(selected_cfg["selected_q_hard_min"])]
+        if selected_cfg.get("selected_new_track_threshold") is not None:
+            new_track_thresholds = [float(selected_cfg["selected_new_track_threshold"])]
+        if selected_cfg.get("selected_existing_track_threshold") is not None:
+            existing_track_thresholds = [float(selected_cfg["selected_existing_track_threshold"])]
     frame_index = load_frame_index(root)
     sequences = load_split_sequences(split_config, split) or sorted(frame_index["sequence_id"].unique())
     if limit_sequences:
@@ -193,13 +219,18 @@ def run_swarm_tnorm_smoke(
     (out / "metadata.json").write_text(
         json.dumps(
             {
-                "stage": "v2.7_soft_reweighting" if any("soft" in s.lower() for s in scenarios) else "v2.6_calibration",
+                "stage": "v2.9_disk_safe_holdout" if split == "holdout" else ("v2.7_soft_reweighting" if any("soft" in s.lower() for s in scenarios) else "v2.6_calibration"),
                 "dataset_type": "synthetic pseudo-swarm",
                 "swarm_dataset_type": "synthetic pseudo-swarm",
                 "source_dataset": "VisDrone2019-VID-val",
                 "stress_transforms_enabled": "stress" in str(swarm_config),
                 "limitation": "pseudo-swarm approximates multi-agent observations using transformed views of the same source frame",
                 "split": split,
+                "swarm_root": str(root),
+                "selected_params_path": str(use_selected_params) if use_selected_params else None,
+                "sequence_batch_size": sequence_batch_size,
+                "max_temp_gb": max_temp_gb,
+                "cleanup_temp": cleanup_temp,
                 "num_agents": int(frame_index["agent_id"].nunique()),
                 "num_sequences": int(frame_index["sequence_id"].nunique()),
                 "num_synchronized_frames": int(frame_index.groupby(["sequence_id", "frame_id"])["agent_id"].nunique().eq(frame_index["agent_id"].nunique()).sum()),
@@ -224,6 +255,24 @@ def run_swarm_tnorm_smoke(
                 "s4_hybrid_status": "soft confidence proxy; full v1.8 recovery is not implemented for swarm_vid pseudo-swarm",
             },
             indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    disk_after = disk_report(Path.cwd())
+    (out / "disk_usage_report.txt").write_text(
+        "\n".join(
+            [
+                "df_before:",
+                disk_before,
+                "df_after:",
+                disk_after,
+                f"swarm_root_du: {du(root)}",
+                f"output_dir_du: {du(out)}",
+                f"materialization_mode: {materialization_mode(frame_index)}",
+                f"max_temp_gb: {max_temp_gb}",
+                f"cleanup_temp_enabled: {cleanup_temp}",
+            ]
         )
         + "\n",
         encoding="utf-8",
@@ -613,6 +662,31 @@ def first_value(frame: pd.DataFrame, col: str):
     if pd.isna(val):
         return None
     return val.item() if hasattr(val, "item") else val
+
+
+def disk_report(path: Path) -> str:
+    usage = shutil.disk_usage(path)
+    return (
+        f"path={path} "
+        f"total_gb={usage.total / (1024**3):.1f} "
+        f"used_gb={usage.used / (1024**3):.1f} "
+        f"free_gb={usage.free / (1024**3):.1f} "
+        f"used_pct={usage.used / max(1, usage.total) * 100:.1f}"
+    )
+
+
+def du(path: Path) -> str:
+    if not path.exists():
+        return "missing"
+    total = sum(p.stat().st_size for p in path.rglob("*") if p.is_file())
+    return f"{total / (1024**3):.3f}G"
+
+
+def materialization_mode(frame_index: pd.DataFrame) -> str:
+    if "is_materialized" not in frame_index:
+        return "materialized"
+    materialized = frame_index["is_materialized"].astype(str).str.lower().isin({"true", "1", "yes"})
+    return "materialized" if bool(materialized.all()) else "manifest_only"
 
 
 def _not_implemented_summary(scenario: str, num_frames: int) -> dict:

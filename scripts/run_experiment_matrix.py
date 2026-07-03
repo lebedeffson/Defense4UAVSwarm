@@ -13,6 +13,7 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--config", default="configs/default.yaml")
     p.add_argument("--swarm-config", default=None)
+    p.add_argument("--swarm-root", default=None)
     p.add_argument("--pseudo-attack-config", default=None)
     p.add_argument("--models", nargs="+", default=["yolov8n", "yolov8s"])
     p.add_argument("--tasks", nargs="+", default=["vid"])
@@ -64,6 +65,11 @@ def main() -> None:
     p.add_argument("--reject-patience", nargs="+", type=int, default=None)
     p.add_argument("--betas", nargs="+", default=None, help="Temporal smoothing betas; use none to include no smoothing.")
     p.add_argument("--use-selected-defense", default=None)
+    p.add_argument("--use-selected-params", default=None)
+    p.add_argument("--sequence-batch-size", type=int, default=None)
+    p.add_argument("--min-free-disk-gb", type=float, default=None)
+    p.add_argument("--max-temp-gb", type=float, default=None)
+    p.add_argument("--cleanup-temp", action="store_true")
     p.add_argument("--semantic-diagnostics", action="store_true")
     p.add_argument("--semantic-features", nargs="+", default=["margin", "augmentation", "temporal"])
     p.add_argument("--xai-method", choices=["eigencam", "gradcam"], default="eigencam")
@@ -172,6 +178,12 @@ def main() -> None:
             xai_max_per_frame=args.xai_max_per_frame,
             semantic_max_frames=args.semantic_max_frames,
             pseudo_attack_config=args.pseudo_attack_config,
+            swarm_root=args.swarm_root,
+            use_selected_params=args.use_selected_params,
+            sequence_batch_size=args.sequence_batch_size,
+            min_free_disk_gb=args.min_free_disk_gb,
+            max_temp_gb=args.max_temp_gb,
+            cleanup_temp=args.cleanup_temp,
             reweight_modes=args.reweight_modes,
             q_floors=args.q_floors,
             gammas=args.gammas,

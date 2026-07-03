@@ -21,6 +21,7 @@ def main() -> None:
     p.add_argument("--split-config", default="configs/vid_split.yaml")
     p.add_argument("--split", choices=["calibration", "holdout"], default="calibration")
     p.add_argument("--limit-sequences", type=int, default=None)
+    p.add_argument("--materialization-mode", choices=["materialized", "manifest_only"], default="materialized")
     p.add_argument("--output", default=None)
     args = p.parse_args()
 
@@ -40,13 +41,15 @@ def main() -> None:
         "dataset_type": "pseudo_swarm",
         "split": args.split,
         "source_root": str(Path(cfg["source_root"])),
+        "materialization_mode": args.materialization_mode,
         "reference_agent": cfg["projection"]["reference_agent"],
         "use_known_transform": bool(cfg["projection"].get("use_known_transform", True)),
         "agents": {},
     }
     for agent in cfg["agents"]:
         agent_id = agent["id"]
-        (output / agent_id).mkdir(parents=True, exist_ok=True)
+        if args.materialization_mode == "materialized":
+            (output / agent_id).mkdir(parents=True, exist_ok=True)
         transforms["agents"][agent_id] = {"transform": agent["transform"]}
 
     for rec in ds.frames(sequences):
@@ -57,22 +60,32 @@ def main() -> None:
         for agent in cfg["agents"]:
             agent_id = agent["id"]
             matrix = affine_matrix(agent["transform"], width, height)
-            warped = cv2.warpAffine(image, matrix[:2], (width, height), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT101)
-            warped = apply_brightness(warped, float(agent["transform"].get("brightness_delta", 0.0)))
-            warped = apply_noise(warped, float(agent["transform"].get("noise_std", 0.0)), rec.frame_id, agent_id)
-            warped = apply_occlusion(warped, float(agent["transform"].get("occlusion_prob", 0.0)), rec.frame_id, agent_id)
             rel_path = Path(agent_id) / rec.sequence_id / f"{rec.frame_id:07d}.jpg"
             out_path = output / rel_path
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(str(out_path), warped)
+            if args.materialization_mode == "materialized":
+                warped = cv2.warpAffine(image, matrix[:2], (width, height), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT101)
+                warped = apply_brightness(warped, float(agent["transform"].get("brightness_delta", 0.0)))
+                warped = apply_noise(warped, float(agent["transform"].get("noise_std", 0.0)), rec.frame_id, agent_id)
+                warped = apply_occlusion(warped, float(agent["transform"].get("occlusion_prob", 0.0)), rec.frame_id, agent_id)
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                cv2.imwrite(str(out_path), warped)
+                materialized_path = str(out_path)
+                image_path = materialized_path
+                is_materialized = True
+            else:
+                materialized_path = ""
+                image_path = str(rec.image_path)
+                is_materialized = False
             matrix_inv = np.linalg.inv(matrix)
             rows.append(
                 {
                     "sequence_id": rec.sequence_id,
                     "frame_id": rec.frame_id,
                     "agent_id": agent_id,
-                    "image_path": str(out_path),
+                    "image_path": image_path,
                     "source_image_path": str(rec.image_path),
+                    "materialized_image_path": materialized_path,
+                    "is_materialized": is_materialized,
                     "transform_to_reference": json.dumps(matrix_inv.round(8).tolist()),
                     "transform_from_reference": json.dumps(matrix.round(8).tolist()),
                 }
@@ -92,10 +105,25 @@ def main() -> None:
     )
     agent_index.to_csv(metadata / "agent_index.csv", index=False)
     (metadata / "transforms.json").write_text(json.dumps(transforms, indent=2) + "\n", encoding="utf-8")
+    (metadata / "build_info.json").write_text(
+        json.dumps(
+            {
+                "materialization_mode": args.materialization_mode,
+                "split": args.split,
+                "num_sequences": len(sequences),
+                "num_frame_rows": len(frame_index),
+                "writes_transformed_images": args.materialization_mode == "materialized",
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     print(f"output: {output}")
     print(f"num_agents: {len(cfg['agents'])}")
     print(f"num_sequences: {len(sequences)}")
     print(f"num_frame_rows: {len(frame_index)}")
+    print(f"materialization_mode: {args.materialization_mode}")
     print(f"frame_index: {metadata / 'frame_index.csv'}")
     print(f"transforms: {metadata / 'transforms.json'}")
 

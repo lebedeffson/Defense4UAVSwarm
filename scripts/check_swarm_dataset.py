@@ -42,7 +42,14 @@ def inspect(root: Path) -> dict:
     expected = len(agents)
     synchronized = int((sync == expected).sum())
     total_sync_groups = int(len(sync))
-    missing_images = int((~frame_index["image_path"].map(lambda p: Path(p).exists())).sum())
+    if "is_materialized" in frame_index:
+        materialized = frame_index["is_materialized"].astype(str).str.lower().isin({"true", "1", "yes"})
+        paths = frame_index["materialized_image_path"].where(materialized, frame_index["source_image_path"])
+        materialization_mode = "materialized" if bool(materialized.all()) else "manifest_only"
+    else:
+        paths = frame_index["image_path"]
+        materialization_mode = "materialized"
+    missing_images = int((~paths.map(lambda p: Path(str(p)).exists())).sum())
     return {
         "root": root,
         "num_agents": len(agents),
@@ -53,6 +60,8 @@ def inspect(root: Path) -> dict:
         "synchronized_frames": synchronized,
         "synchronization_groups": total_sync_groups,
         "has_transforms": transforms_path.exists(),
+        "materialization_mode": materialization_mode,
+        "is_materialized": materialization_mode == "materialized",
         "reference_agent": transforms.get("reference_agent"),
         "has_frame_index": frame_index_path.exists(),
         "has_agent_index": agent_index_path.exists(),
