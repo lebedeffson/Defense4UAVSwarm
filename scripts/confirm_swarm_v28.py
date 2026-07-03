@@ -68,7 +68,7 @@ def main() -> None:
         fn_delta_pct = cand["FN_delta_vs_S_naive"] / max(1, naive["FN"])
         strict = cand["FN_delta_vs_S_naive"] <= 0 and cand["FP_delta_vs_S_naive"] < 0 and cand["F1_delta_vs_S_naive"] >= 0
         soft = fn_delta_pct <= 0.02 and cand["FP_delta_vs_S_naive"] < 0 and cand["F1_delta_vs_S_naive"] >= -0.001
-        source_stage = "v2.9_holdout" if split == "holdout" else "v2.8_full_calibration"
+        source_stage = _source_stage(root, split)
         selected = {
             "selection_status": "selected" if strict else ("tradeoff_selected" if soft else "not_selected"),
             "holdout_allowed": bool(strict or soft),
@@ -105,6 +105,13 @@ def _value(row: pd.Series, key: str, default):
     if pd.isna(value):
         return default
     return value.item() if hasattr(value, "item") else value
+
+
+def _source_stage(root: Path, split: str) -> str:
+    root_text = str(root).lower()
+    if "swarm_v3" in root_text or "newgate" in root_text:
+        return "v3.0_newtrack_gate_holdout" if split == "holdout" else "v3.0_newtrack_gate_calibration"
+    return "v2.9_holdout" if split == "holdout" else "v2.8_full_calibration"
 
 
 if __name__ == "__main__":

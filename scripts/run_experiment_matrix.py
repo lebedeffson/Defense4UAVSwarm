@@ -73,6 +73,12 @@ def main() -> None:
     p.add_argument("--semantic-diagnostics", action="store_true")
     p.add_argument("--semantic-features", nargs="+", default=["margin", "augmentation", "temporal"])
     p.add_argument("--xai-method", choices=["eigencam", "gradcam"], default="eigencam")
+    p.add_argument("--xai-newtrack-only", default=None)
+    p.add_argument("--xai-boundary-margins", nargs="+", type=float, default=None)
+    p.add_argument("--xai-q-triggers", nargs="+", type=float, default=None)
+    p.add_argument("--xai-mins", nargs="+", type=float, default=None)
+    p.add_argument("--xai-floors", nargs="+", type=float, default=None)
+    p.add_argument("--xai-veto-modes", nargs="+", default=None)
     p.add_argument("--augmentation-count", type=int, default=3)
     p.add_argument("--semantic-max-frames", type=int, default=None)
     p.add_argument("--xai-max-per-frame", type=int, default=3)
@@ -188,6 +194,12 @@ def main() -> None:
             min_free_disk_gb=args.min_free_disk_gb,
             max_temp_gb=args.max_temp_gb,
             cleanup_temp=args.cleanup_temp,
+            xai_newtrack_only=str(args.xai_newtrack_only).lower() == "true" if args.xai_newtrack_only is not None else False,
+            xai_boundary_margins=args.xai_boundary_margins,
+            xai_q_triggers=args.xai_q_triggers,
+            xai_mins=args.xai_mins,
+            xai_floors=args.xai_floors,
+            xai_veto_modes=args.xai_veto_modes,
             reweight_modes=args.reweight_modes,
             q_floors=args.q_floors,
             q_floors_new=args.q_floors_new,

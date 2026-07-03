@@ -33,6 +33,12 @@ def run_swarm_tnorm_smoke(
     min_free_disk_gb: float | None = None,
     max_temp_gb: float | None = None,
     cleanup_temp: bool = False,
+    xai_newtrack_only: bool = False,
+    xai_boundary_margins: list[float] | None = None,
+    xai_q_triggers: list[float] | None = None,
+    xai_mins: list[float] | None = None,
+    xai_floors: list[float] | None = None,
+    xai_veto_modes: list[str] | None = None,
     reweight_modes: list[str] | None = None,
     q_floors: list[float] | None = None,
     gammas: list[float] | None = None,
@@ -109,6 +115,11 @@ def run_swarm_tnorm_smoke(
     q_floors_existing = q_floors_existing or [0.90]
     q_new_modes = q_new_modes or ["min_ks"]
     q_new_mins = q_new_mins or [0.0, 0.05, 0.10]
+    xai_boundary_margins = xai_boundary_margins or [0.05]
+    xai_q_triggers = xai_q_triggers or [0.30]
+    xai_mins = xai_mins or [0.20]
+    xai_floors = xai_floors or [0.80]
+    xai_veto_modes = xai_veto_modes or ["soft"]
     gammas = gammas or [0.25, 0.50]
     q_hard_mins = q_hard_mins or [0.0]
     new_track_thresholds = new_track_thresholds or [0.30]
@@ -220,6 +231,58 @@ def run_swarm_tnorm_smoke(
                                                 "selected": False,
                                             }
                                         )
+        elif scenario.lower() == "s3_xai_newtrack_veto":
+            for norm in t_norms:
+                for mode in reweight_modes:
+                    floors = q_floors if mode == "multiplicative_floor" else [None]
+                    powers = gammas if mode == "power" else [None]
+                    for q_floor in floors:
+                        for gamma in powers:
+                            for q_hard_min in q_hard_mins:
+                                for new_thr in new_track_thresholds:
+                                    for existing_thr in existing_track_thresholds:
+                                        base_frame = soft_reweight_frame(features, "S3_xai_newtrack_veto", norm, False, mode, q_floor, gamma, q_hard_min, new_thr, existing_thr)
+                                        for boundary_margin in xai_boundary_margins:
+                                            for q_trigger in xai_q_triggers:
+                                                for xai_veto_mode in xai_veto_modes:
+                                                    mins = xai_mins if xai_veto_mode == "hard" else [None]
+                                                    floors_x = xai_floors if xai_veto_mode == "soft" else [None]
+                                                    for x_min in mins:
+                                                        for xai_floor in floors_x:
+                                                            frame, audit_part = apply_xai_newtrack_veto(
+                                                                base_frame,
+                                                                frame_index,
+                                                                xai_method,
+                                                                xai_max_per_frame,
+                                                                boundary_margin,
+                                                                q_trigger,
+                                                                xai_veto_mode,
+                                                                x_min,
+                                                                xai_floor,
+                                                            )
+                                                            rows.append(_summary(frame, "S3_xai_newtrack_veto", norm, None, total_frames, expected_gt))
+                                                            feature_frames.append(frame)
+                                                            if len(audit_part):
+                                                                xai_audit = pd.concat([xai_audit, audit_part], ignore_index=True)
+                                                            threshold_rows.append(
+                                                                {
+                                                                    "scenario": "S3_xai_newtrack_veto",
+                                                                    "t_norm": norm,
+                                                                    "tau_Q": None,
+                                                                    "reweight_mode": mode,
+                                                                    "q_floor": q_floor,
+                                                                    "gamma": gamma,
+                                                                    "q_hard_min": q_hard_min,
+                                                                    "new_track_threshold": new_thr,
+                                                                    "existing_track_threshold": existing_thr,
+                                                                    "xai_veto_mode": xai_veto_mode,
+                                                                    "boundary_margin": boundary_margin,
+                                                                    "q_xai_trigger": q_trigger,
+                                                                    "x_min": x_min,
+                                                                    "xai_floor": xai_floor,
+                                                                    "selected": False,
+                                                                }
+                                                            )
         elif scenario.lower() in {"s3_safe_recovery", "s4_hybrid"}:
             rows.append(_not_implemented_summary("S3_safe_recovery" if scenario.lower() == "s3_safe_recovery" else "S4_hybrid", total_frames))
     audit = features.copy()
@@ -247,6 +310,8 @@ def run_swarm_tnorm_smoke(
     summary = pd.DataFrame(rows)
     threshold = pd.DataFrame(threshold_rows)
     selected = select_params(summary, threshold)
+    stage = _stage_name(scenarios, split, out, selected_cfg, use_selected_params)
+    selected.setdefault("source_stage", stage)
     if len(threshold) and selected.get("selection_status") == "selected":
         mask = (threshold["scenario"] == selected["selected_scenario"]) & (threshold["t_norm"] == selected["selected_t_norm"])
         for key, col in [
@@ -261,6 +326,11 @@ def run_swarm_tnorm_smoke(
             ("selected_q_floor_new", "q_floor_new"),
             ("selected_q_floor_existing", "q_floor_existing"),
             ("selected_q_new_min", "q_new_min"),
+            ("selected_xai_veto_mode", "xai_veto_mode"),
+            ("selected_boundary_margin", "boundary_margin"),
+            ("selected_q_xai_trigger", "q_xai_trigger"),
+            ("selected_x_min", "x_min"),
+            ("selected_xai_floor", "xai_floor"),
         ]:
             if key in selected and col in threshold:
                 val = selected[key]
@@ -275,15 +345,14 @@ def run_swarm_tnorm_smoke(
     new_track_suppression(summary, features).to_csv(out / "new_track_suppression_summary.csv", index=False)
     new_track_gate_summary(summary, feature_frames).to_csv(out / "new_track_gate_summary.csv", index=False)
     candidate_score_distribution(feature_frames).to_csv(out / "candidate_score_distribution.csv", index=False)
+    xai_newtrack_veto_summary(summary, feature_frames).to_csv(out / "xai_newtrack_veto_summary.csv", index=False)
     recall_preservation(summary).to_csv(out / "recall_preservation_summary.csv", index=False)
     summary.to_csv(out / "robustness_summary.csv", index=False)
     write_selected_params(out / "selected_params.yaml", selected)
     (out / "metadata.json").write_text(
         json.dumps(
             {
-                "stage": "v3.0_adaptive_new_track_gating"
-                if any("newgate" in s.lower() or "adaptive" in s.lower() or "soft_v2" in s.lower() for s in scenarios)
-                else ("v2.9_disk_safe_holdout" if split == "holdout" else ("v2.7_soft_reweighting" if any("soft" in s.lower() for s in scenarios) else "v2.6_calibration")),
+                "stage": stage,
                 "dataset_type": "synthetic pseudo-swarm",
                 "swarm_dataset_type": "synthetic pseudo-swarm",
                 "source_dataset": "VisDrone2019-VID-val",
@@ -442,6 +511,91 @@ def apply_xai_smoke(features: pd.DataFrame, frame_index: pd.DataFrame, method: s
         ]
     )
     return out, audit, summary
+
+
+def apply_xai_newtrack_veto(
+    base_frame: pd.DataFrame,
+    frame_index: pd.DataFrame,
+    method: str,
+    max_per_frame: int,
+    boundary_margin: float,
+    q_trigger: float,
+    veto_mode: str,
+    x_min: float | None,
+    xai_floor: float | None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    frame = base_frame.copy()
+    frame["xai_called"] = False
+    frame["xai_method"] = None
+    frame["xai_veto_mode"] = veto_mode
+    frame["xai_max_per_frame"] = max_per_frame
+    frame["boundary_margin"] = boundary_margin
+    frame["q_xai_trigger"] = q_trigger
+    frame["x_min"] = x_min
+    frame["xai_floor"] = xai_floor
+    frame["confidence_xai"] = frame["confidence_new"]
+    is_new = frame["track_status"].eq("new_candidate")
+    near_boundary = (frame["confidence_new"] - frame["new_track_threshold"]).abs() <= boundary_margin
+    low_q = frame["Q_i"] <= q_trigger
+    candidates_mask = is_new & (near_boundary | low_q)
+    image_paths = frame_index.set_index(["sequence_id", "frame_id", "agent_id"])["image_path"].to_dict()
+    audit_rows = []
+    cam_cache: dict[str, tuple[np.ndarray | None, float]] = {}
+    for _, group in frame[candidates_mask].groupby(["sequence_id", "frame_id"], sort=False):
+        candidates = group.sort_values(["confidence_new", "Q_i"], ascending=[False, True]).head(max_per_frame)
+        for rank, (idx, row) in enumerate(candidates.iterrows(), start=1):
+            image_key = (row.sequence_id, row.frame_id, row.agent_id)
+            image_path = image_paths.get(image_key, "")
+            if image_path not in cam_cache:
+                cam_cache[image_path] = compute_cam(image_path, method=method)
+            cam, latency = cam_cache[image_path]
+            scores = compute_xai_score(cam, (row.x1, row.y1, row.x2, row.y2))
+            x_value = float(scores["x_i_selected"]) if scores["x_i_selected"] is not None else 1.0
+            frame.loc[idx, "x_i"] = x_value
+            frame.loc[idx, "xai_called"] = True
+            frame.loc[idx, "xai_method"] = method
+            if veto_mode == "hard":
+                if x_min is not None and x_value < x_min:
+                    frame.loc[idx, "accepted"] = False
+                    frame.loc[idx, "filter_action"] = "xai_hard_veto_new_track"
+            elif veto_mode == "soft":
+                floor = float(xai_floor if xai_floor is not None else 0.8)
+                conf_xai = float(row.confidence_new) * (floor + (1.0 - floor) * x_value)
+                frame.loc[idx, "confidence_xai"] = conf_xai
+                frame.loc[idx, "confidence"] = conf_xai
+                allowed = conf_xai >= float(row.new_track_threshold)
+                frame.loc[idx, "accepted"] = bool(allowed)
+                if not allowed:
+                    frame.loc[idx, "filter_action"] = "xai_soft_veto_new_track"
+            else:
+                raise ValueError(f"Unknown XAI veto mode: {veto_mode}")
+            audit_row = {
+                "sequence_id": row.sequence_id,
+                "frame_id": row.frame_id,
+                "agent_id": row.agent_id,
+                "det_id": row.det_id,
+                "track_id": row.track_id,
+                "scenario": "S3_xai_newtrack_veto",
+                "xai_method": method,
+                "xai_called": True,
+                "xai_available": scores["x_i_selected"] is not None,
+                "xai_rank_in_frame": rank,
+                "confidence": row.confidence_original,
+                "confidence_new": row.confidence_new,
+                "Q_i": row.Q_i,
+                "boundary_margin": boundary_margin,
+                "q_xai_trigger": q_trigger,
+                "xai_veto_mode": veto_mode,
+                "x_min": x_min,
+                "xai_floor": xai_floor,
+                "x_i": x_value,
+                "xai_latency_ms": latency,
+                "is_TP": bool(row.eval_is_tp),
+                "is_FP": not bool(row.eval_is_tp),
+            }
+            audit_row.update(scores)
+            audit_rows.append(audit_row)
+    return frame, pd.DataFrame(audit_rows)
 
 
 def prepare_features(features: pd.DataFrame, eps_values: list[float]) -> pd.DataFrame:
@@ -755,6 +909,11 @@ def _summary(frame: pd.DataFrame, scenario: str, norm: str | None, tau: float | 
         "q_floor_existing": first_value(frame, "q_floor_existing"),
         "q_new_mode": first_value(frame, "q_new_mode"),
         "q_new_min": first_value(frame, "q_new_min"),
+        "xai_veto_mode": first_value(frame, "xai_veto_mode"),
+        "boundary_margin": first_value(frame, "boundary_margin"),
+        "q_xai_trigger": first_value(frame, "q_xai_trigger"),
+        "x_min": first_value(frame, "x_min"),
+        "xai_floor": first_value(frame, "xai_floor"),
         "gamma": first_value(frame, "gamma"),
         "beta": first_value(frame, "beta"),
         "q_hard_min": first_value(frame, "q_hard_min"),
@@ -815,6 +974,29 @@ def materialization_mode(frame_index: pd.DataFrame) -> str:
     return "materialized" if bool(materialized.all()) else "manifest_only"
 
 
+def _stage_name(
+    scenarios: list[str],
+    split: str,
+    out: Path,
+    selected_cfg: dict,
+    use_selected_params: str | Path | None,
+) -> str:
+    scenario_text = " ".join(s.lower() for s in scenarios)
+    path_text = f"{out} {use_selected_params or ''}".lower()
+    selected_stage = str(selected_cfg.get("source_stage", "")).lower()
+    if "xai_newtrack" in scenario_text or "v3_1" in path_text:
+        return "v3.1_xai_newtrack_veto"
+    if "v3_newgate" in path_text or "v3.0" in selected_stage:
+        return "v3.0_newtrack_gate_holdout" if split == "holdout" else "v3.0_newtrack_gate_calibration"
+    if any(key in scenario_text for key in ["newgate", "adaptive", "soft_v2"]):
+        return "v3.0_newtrack_gate_holdout" if split == "holdout" else "v3.0_newtrack_gate_calibration"
+    if split == "holdout":
+        return "v2.9_disk_safe_holdout"
+    if "soft" in scenario_text:
+        return "v2.7_soft_reweighting"
+    return "v2.6_calibration"
+
+
 def _not_implemented_summary(scenario: str, num_frames: int) -> dict:
     return {
         "scenario": scenario,
@@ -869,6 +1051,52 @@ def _track_breaks(frame: pd.DataFrame) -> int:
 
 
 def select_params(summary: pd.DataFrame, threshold: pd.DataFrame) -> dict:
+    xai_candidates = summary[summary["scenario"] == "S3_xai_newtrack_veto"].copy()
+    if not xai_candidates.empty:
+        s2 = summary[summary["scenario"] == "S2_tnorm_soft"].sort_values(["F1", "IDF1"], ascending=False)
+        if s2.empty:
+            return {"selection_status": "not_selected", "holdout_allowed": False, "reason": "missing_s2_baseline"}
+        base = s2.iloc[0]
+        valid = xai_candidates[
+            (xai_candidates["FP"] < base["FP"])
+            & (xai_candidates["FN"] <= base["FN"] * 1.005)
+            & (xai_candidates["F1"] >= base["F1"])
+        ].copy()
+        if valid.empty:
+            best_diag = xai_candidates.assign(
+                score=(base["FP"] - xai_candidates["FP"]) / max(1, base["FP"]) + (xai_candidates["F1"] - base["F1"])
+            ).sort_values("score", ascending=False).iloc[0]
+            return {
+                "selection_status": "not_selected",
+                "holdout_allowed": False,
+                "reason": "xai_veto_does_not_improve_s2_soft",
+                "baseline_s2_F1": float(base["F1"]),
+                "best_xai_FP_delta_vs_S2": int(best_diag["FP"] - base["FP"]),
+                "best_xai_FN_delta_vs_S2": int(best_diag["FN"] - base["FN"]),
+                "best_xai_F1_delta_vs_S2": float(best_diag["F1"] - base["F1"]),
+            }
+        valid["score"] = (base["FP"] - valid["FP"]) / max(1, base["FP"]) + (valid["F1"] - base["F1"])
+        best = valid.sort_values("score", ascending=False).iloc[0]
+        return {
+            "selection_status": "selected",
+            "holdout_allowed": True,
+            "selected_scenario": "S3_xai_newtrack_veto",
+            "selected_t_norm": first_value(best.to_frame().T, "t_norm"),
+            "selected_reweight_mode": first_value(best.to_frame().T, "reweight_mode"),
+            "selected_q_floor": first_value(best.to_frame().T, "q_floor"),
+            "selected_q_hard_min": first_value(best.to_frame().T, "q_hard_min"),
+            "selected_new_track_threshold": first_value(best.to_frame().T, "new_track_threshold"),
+            "selected_existing_track_threshold": first_value(best.to_frame().T, "existing_track_threshold"),
+            "selected_xai_veto_mode": first_value(best.to_frame().T, "xai_veto_mode"),
+            "selected_boundary_margin": first_value(best.to_frame().T, "boundary_margin"),
+            "selected_q_xai_trigger": first_value(best.to_frame().T, "q_xai_trigger"),
+            "selected_x_min": first_value(best.to_frame().T, "x_min"),
+            "selected_xai_floor": first_value(best.to_frame().T, "xai_floor"),
+            "FP_delta_vs_S2": int(best["FP"] - base["FP"]),
+            "FN_delta_vs_S2": int(best["FN"] - base["FN"]),
+            "F1_delta_vs_S2": float(best["F1"] - base["F1"]),
+            "reason": "xai_newtrack_veto_improves_s2_soft",
+        }
     candidates = summary[
         summary["scenario"].isin(
             [
@@ -1005,6 +1233,7 @@ def new_track_suppression(summary: pd.DataFrame, features: pd.DataFrame) -> pd.D
 def new_track_gate_summary(summary: pd.DataFrame, feature_frames: list[pd.DataFrame]) -> pd.DataFrame:
     naive = summary[summary["scenario"] == "S_naive"].sort_values(["F1", "IDF1"], ascending=False)
     base = naive.iloc[0] if len(naive) else None
+    expected_gt = _expected_gt_from_summary(summary)
     rows = []
     for frame in feature_frames:
         if frame.empty or "scenario" not in frame:
@@ -1015,7 +1244,14 @@ def new_track_gate_summary(summary: pd.DataFrame, feature_frames: list[pd.DataFr
         is_new = frame["track_status"].eq("new_candidate")
         is_tp = frame["eval_is_tp"].astype(bool)
         suppressed = is_new & ~frame["accepted"].astype(bool)
-        metric = _summary(frame, scenario, first_value(frame, "t_norm"), None, int(frame[["sequence_id", "frame_id"]].drop_duplicates().shape[0]))
+        metric = _summary(
+            frame,
+            scenario,
+            first_value(frame, "t_norm"),
+            None,
+            int(frame[["sequence_id", "frame_id"]].drop_duplicates().shape[0]),
+            expected_gt,
+        )
         rows.append(
             {
                 "scenario": scenario,
@@ -1068,6 +1304,84 @@ def candidate_score_distribution(feature_frames: list[pd.DataFrame]) -> pd.DataF
                 }
             )
     return pd.DataFrame(rows)
+
+
+def xai_newtrack_veto_summary(summary: pd.DataFrame, feature_frames: list[pd.DataFrame]) -> pd.DataFrame:
+    s2 = summary[summary["scenario"] == "S2_tnorm_soft"].sort_values(["F1", "IDF1"], ascending=False)
+    base = s2.iloc[0] if len(s2) else None
+    expected_gt = _expected_gt_from_summary(summary)
+    selected = select_params(summary, pd.DataFrame())
+    rows = []
+    for frame in feature_frames:
+        if frame.empty or "scenario" not in frame or str(frame["scenario"].iloc[0]) != "S3_xai_newtrack_veto":
+            continue
+        called = frame["xai_called"].astype(bool) if "xai_called" in frame else pd.Series(False, index=frame.index)
+        vetoed = called & ~frame["accepted"].astype(bool)
+        is_tp = frame["eval_is_tp"].astype(bool)
+        metric = _summary(
+            frame,
+            "S3_xai_newtrack_veto",
+            first_value(frame, "t_norm"),
+            None,
+            int(frame[["sequence_id", "frame_id"]].drop_duplicates().shape[0]),
+            expected_gt,
+        )
+        row = {
+            "xai_veto_mode": first_value(frame, "xai_veto_mode"),
+            "boundary_margin": first_value(frame, "boundary_margin"),
+            "q_xai_trigger": first_value(frame, "q_xai_trigger"),
+            "x_min": first_value(frame, "x_min"),
+            "xai_floor": first_value(frame, "xai_floor"),
+            "xai_max_per_frame": first_value(frame, "xai_max_per_frame"),
+            "num_xai_called": int(called.sum()),
+            "xai_calls_per_frame": int(called.sum()) / max(1, int(frame[["sequence_id", "frame_id"]].drop_duplicates().shape[0])),
+            "num_vetoed": int(vetoed.sum()),
+            "vetoed_TP": int((vetoed & is_tp).sum()),
+            "vetoed_FP": int((vetoed & ~is_tp).sum()),
+            "FP_delta_vs_S2": None if base is None else int(metric["FP"] - base["FP"]),
+            "FN_delta_vs_S2": None if base is None else int(metric["FN"] - base["FN"]),
+            "F1_delta_vs_S2": None if base is None else float(metric["F1"] - base["F1"]),
+            "latency_ms": 0.0,
+        }
+        row["selected_candidate"] = _xai_summary_row_selected(row, selected)
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _xai_summary_row_selected(row: dict, selected: dict) -> bool:
+    if selected.get("selected_scenario") != "S3_xai_newtrack_veto":
+        return False
+    checks = [
+        ("xai_veto_mode", "selected_xai_veto_mode"),
+        ("boundary_margin", "selected_boundary_margin"),
+        ("q_xai_trigger", "selected_q_xai_trigger"),
+        ("x_min", "selected_x_min"),
+        ("xai_floor", "selected_xai_floor"),
+    ]
+    for row_key, selected_key in checks:
+        if not _same_value(row.get(row_key), selected.get(selected_key)):
+            return False
+    return True
+
+
+def _same_value(a, b) -> bool:
+    if a is None and b is None:
+        return True
+    if pd.isna(a) and (b is None or pd.isna(b)):
+        return True
+    if b is None and pd.isna(a):
+        return True
+    try:
+        return abs(float(a) - float(b)) < 1e-9
+    except (TypeError, ValueError):
+        return str(a) == str(b)
+
+
+def _expected_gt_from_summary(summary: pd.DataFrame) -> int | None:
+    if summary.empty or not {"TP", "FN"}.issubset(summary.columns):
+        return None
+    totals = (summary["TP"] + summary["FN"]).dropna()
+    return int(totals.max()) if len(totals) else None
 
 
 def recall_preservation(summary: pd.DataFrame) -> pd.DataFrame:
