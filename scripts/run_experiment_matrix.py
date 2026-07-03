@@ -90,6 +90,10 @@ def main() -> None:
     p.add_argument("--recovery-cooldown", nargs="+", type=int, default=None)
     p.add_argument("--reweight-modes", nargs="+", default=None)
     p.add_argument("--q-floors", nargs="+", type=float, default=None)
+    p.add_argument("--q-floors-new", nargs="+", type=float, default=None)
+    p.add_argument("--q-floors-existing", nargs="+", type=float, default=None)
+    p.add_argument("--q-new-modes", nargs="+", default=None)
+    p.add_argument("--q-new-mins", nargs="+", type=float, default=None)
     p.add_argument("--gammas", nargs="+", type=float, default=None)
     p.add_argument("--q-hard-mins", nargs="+", type=float, default=None)
     p.add_argument("--new-track-thresholds", nargs="+", type=float, default=None)
@@ -186,6 +190,10 @@ def main() -> None:
             cleanup_temp=args.cleanup_temp,
             reweight_modes=args.reweight_modes,
             q_floors=args.q_floors,
+            q_floors_new=args.q_floors_new,
+            q_floors_existing=args.q_floors_existing,
+            q_new_modes=args.q_new_modes,
+            q_new_mins=args.q_new_mins,
             gammas=args.gammas,
             q_hard_mins=args.q_hard_mins,
             new_track_thresholds=args.new_track_thresholds,

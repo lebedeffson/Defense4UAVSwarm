@@ -37,6 +37,10 @@ def run_swarm_tnorm_smoke(
     q_floors: list[float] | None = None,
     gammas: list[float] | None = None,
     q_hard_mins: list[float] | None = None,
+    q_floors_new: list[float] | None = None,
+    q_floors_existing: list[float] | None = None,
+    q_new_modes: list[str] | None = None,
+    q_new_mins: list[float] | None = None,
     new_track_thresholds: list[float] | None = None,
     existing_track_thresholds: list[float] | None = None,
 ) -> None:
@@ -60,6 +64,14 @@ def run_swarm_tnorm_smoke(
             reweight_modes = [selected_cfg["selected_reweight_mode"]]
         if selected_cfg.get("selected_q_floor") is not None:
             q_floors = [float(selected_cfg["selected_q_floor"])]
+        if selected_cfg.get("selected_q_floor_new") is not None:
+            q_floors_new = [float(selected_cfg["selected_q_floor_new"])]
+        if selected_cfg.get("selected_q_floor_existing") is not None:
+            q_floors_existing = [float(selected_cfg["selected_q_floor_existing"])]
+        if selected_cfg.get("selected_q_new_mode"):
+            q_new_modes = [selected_cfg["selected_q_new_mode"]]
+        if selected_cfg.get("selected_q_new_min") is not None:
+            q_new_mins = [float(selected_cfg["selected_q_new_min"])]
         if selected_cfg.get("selected_q_hard_min") is not None:
             q_hard_mins = [float(selected_cfg["selected_q_hard_min"])]
         if selected_cfg.get("selected_new_track_threshold") is not None:
@@ -93,6 +105,10 @@ def run_swarm_tnorm_smoke(
     tau_conf_grid = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60]
     reweight_modes = reweight_modes or ["multiplicative_floor"]
     q_floors = q_floors or [0.60, 0.70, 0.80]
+    q_floors_new = q_floors_new or [0.50, 0.60, 0.70]
+    q_floors_existing = q_floors_existing or [0.90]
+    q_new_modes = q_new_modes or ["min_ks"]
+    q_new_mins = q_new_mins or [0.0, 0.05, 0.10]
     gammas = gammas or [0.25, 0.50]
     q_hard_mins = q_hard_mins or [0.0]
     new_track_thresholds = new_track_thresholds or [0.30]
@@ -164,6 +180,46 @@ def run_swarm_tnorm_smoke(
                                         rows.append(_summary(frame, scenario_name, norm, None, total_frames, expected_gt))
                                         feature_frames.append(frame)
                                         threshold_rows.append({"scenario": scenario_name, "t_norm": norm, "tau_Q": None, "reweight_mode": mode, "q_floor": q_floor, "gamma": gamma, "q_hard_min": q_hard_min, "new_track_threshold": new_thr, "existing_track_threshold": existing_thr, "selected": False})
+        elif scenario.lower() in {"s2_tnorm_soft_v2", "s2_tnorm_newgate", "s2_tnorm_adaptive"}:
+            scenario_name = {
+                "s2_tnorm_soft_v2": "S2_tnorm_soft_v2",
+                "s2_tnorm_newgate": "S2_tnorm_newgate",
+                "s2_tnorm_adaptive": "S2_tnorm_adaptive",
+            }[scenario.lower()]
+            for norm in t_norms:
+                for q_new_mode in q_new_modes:
+                    for q_floor_new in q_floors_new:
+                        for q_floor_existing in q_floors_existing:
+                            for q_new_min in q_new_mins:
+                                for new_thr in new_track_thresholds:
+                                    for existing_thr in existing_track_thresholds:
+                                        frame = adaptive_newgate_frame(
+                                            features,
+                                            scenario_name,
+                                            norm,
+                                            q_new_mode,
+                                            q_floor_new,
+                                            q_floor_existing,
+                                            q_new_min,
+                                            new_thr,
+                                            existing_thr,
+                                        )
+                                        rows.append(_summary(frame, scenario_name, norm, None, total_frames, expected_gt))
+                                        feature_frames.append(frame)
+                                        threshold_rows.append(
+                                            {
+                                                "scenario": scenario_name,
+                                                "t_norm": norm,
+                                                "tau_Q": None,
+                                                "q_new_mode": q_new_mode,
+                                                "q_floor_new": q_floor_new,
+                                                "q_floor_existing": q_floor_existing,
+                                                "q_new_min": q_new_min,
+                                                "new_track_threshold": new_thr,
+                                                "existing_track_threshold": existing_thr,
+                                                "selected": False,
+                                            }
+                                        )
         elif scenario.lower() in {"s3_safe_recovery", "s4_hybrid"}:
             rows.append(_not_implemented_summary("S3_safe_recovery" if scenario.lower() == "s3_safe_recovery" else "S4_hybrid", total_frames))
     audit = features.copy()
@@ -201,6 +257,10 @@ def run_swarm_tnorm_smoke(
             ("selected_q_hard_min", "q_hard_min"),
             ("selected_new_track_threshold", "new_track_threshold"),
             ("selected_existing_track_threshold", "existing_track_threshold"),
+            ("selected_q_new_mode", "q_new_mode"),
+            ("selected_q_floor_new", "q_floor_new"),
+            ("selected_q_floor_existing", "q_floor_existing"),
+            ("selected_q_new_min", "q_new_min"),
         ]:
             if key in selected and col in threshold:
                 val = selected[key]
@@ -213,13 +273,17 @@ def run_swarm_tnorm_smoke(
     build_ablation(features, total_frames, expected_gt).to_csv(out / "ablation_summary.csv", index=False)
     error_type_breakdown(summary, attack_events).to_csv(out / "error_type_breakdown.csv", index=False)
     new_track_suppression(summary, features).to_csv(out / "new_track_suppression_summary.csv", index=False)
+    new_track_gate_summary(summary, feature_frames).to_csv(out / "new_track_gate_summary.csv", index=False)
+    candidate_score_distribution(feature_frames).to_csv(out / "candidate_score_distribution.csv", index=False)
     recall_preservation(summary).to_csv(out / "recall_preservation_summary.csv", index=False)
     summary.to_csv(out / "robustness_summary.csv", index=False)
     write_selected_params(out / "selected_params.yaml", selected)
     (out / "metadata.json").write_text(
         json.dumps(
             {
-                "stage": "v2.9_disk_safe_holdout" if split == "holdout" else ("v2.7_soft_reweighting" if any("soft" in s.lower() for s in scenarios) else "v2.6_calibration"),
+                "stage": "v3.0_adaptive_new_track_gating"
+                if any("newgate" in s.lower() or "adaptive" in s.lower() or "soft_v2" in s.lower() for s in scenarios)
+                else ("v2.9_disk_safe_holdout" if split == "holdout" else ("v2.7_soft_reweighting" if any("soft" in s.lower() for s in scenarios) else "v2.6_calibration")),
                 "dataset_type": "synthetic pseudo-swarm",
                 "swarm_dataset_type": "synthetic pseudo-swarm",
                 "source_dataset": "VisDrone2019-VID-val",
@@ -589,6 +653,64 @@ def soft_reweight_frame(
     return frame
 
 
+def q_new_score(frame: pd.DataFrame, mode: str) -> pd.Series:
+    k = frame["k_i"].clip(lower=1e-6)
+    s = frame["s_i"].clip(lower=1e-6)
+    if mode == "min_ks":
+        return pd.concat([k, s], axis=1).min(axis=1)
+    if mode == "geom_ks":
+        return (k * s) ** 0.5
+    if mode == "hmean_ks":
+        return 2.0 / (1.0 / k + 1.0 / s)
+    raise ValueError(f"Unknown q_new_mode: {mode}")
+
+
+def adaptive_newgate_frame(
+    features: pd.DataFrame,
+    scenario: str,
+    norm: str,
+    q_new_mode: str,
+    q_floor_new: float,
+    q_floor_existing: float,
+    q_new_min: float,
+    new_track_threshold: float,
+    existing_track_threshold: float,
+) -> pd.DataFrame:
+    frame = features.copy()
+    frame["scenario"] = scenario
+    frame["x_i"] = 1.0
+    frame["t_norm"] = norm
+    frame["Q_existing"] = _q(frame, norm)
+    frame["Q_new"] = q_new_score(frame, q_new_mode)
+    is_new = frame["track_status"].eq("new_candidate")
+    frame["Q_i"] = np.where(scenario == "S2_tnorm_adaptive", np.where(is_new, frame["Q_new"], frame["Q_existing"]), frame["Q_existing"])
+    frame["confidence_original"] = frame["confidence"].astype(float)
+    weight_new = q_floor_new + (1.0 - q_floor_new) * frame["Q_new"]
+    weight_existing = q_floor_existing + (1.0 - q_floor_existing) * frame["Q_existing"]
+    if scenario == "S2_tnorm_soft_v2":
+        weight_new = q_floor_new + (1.0 - q_floor_new) * frame["Q_existing"]
+    frame["confidence_new"] = frame["confidence_original"] * np.where(is_new, weight_new, weight_existing)
+    frame["confidence"] = frame["confidence_new"]
+    frame["q_new_mode"] = q_new_mode
+    frame["q_floor_new"] = q_floor_new
+    frame["q_floor_existing"] = q_floor_existing
+    frame["q_new_min"] = q_new_min
+    frame["new_track_threshold"] = new_track_threshold
+    frame["existing_track_threshold"] = existing_track_threshold
+    frame["reweight_mode"] = "adaptive_newgate"
+    frame["reweight_stage"] = "post_nms_pre_tracker"
+    frame["q_hard_min"] = 0.0
+    frame["was_hard_rejected"] = False
+    frame["new_track_allowed"] = (frame["confidence_new"] >= new_track_threshold) & (
+        (frame["Q_new"] >= q_new_min) if scenario in {"S2_tnorm_newgate", "S2_tnorm_adaptive"} else True
+    )
+    frame["existing_track_allowed"] = frame["confidence_new"] >= existing_track_threshold
+    frame["accepted"] = np.where(is_new, frame["new_track_allowed"], frame["existing_track_allowed"])
+    frame["filter_action"] = np.where(is_new & ~frame["new_track_allowed"], "suppress_new_track", "soft_reweight")
+    frame["tau_Q"] = None
+    return frame
+
+
 def _summary(frame: pd.DataFrame, scenario: str, norm: str | None, tau: float | None, num_frames: int, expected_gt: int | None = None) -> dict:
     total_gt = int(expected_gt if expected_gt is not None else (frame["track_id"] != -1).sum())
     accepted = frame["accepted"].astype(bool)
@@ -629,6 +751,10 @@ def _summary(frame: pd.DataFrame, scenario: str, norm: str | None, tau: float | 
         "xai_latency_ms": 0.0,
         "reweight_mode": first_value(frame, "reweight_mode"),
         "q_floor": first_value(frame, "q_floor"),
+        "q_floor_new": first_value(frame, "q_floor_new"),
+        "q_floor_existing": first_value(frame, "q_floor_existing"),
+        "q_new_mode": first_value(frame, "q_new_mode"),
+        "q_new_min": first_value(frame, "q_new_min"),
         "gamma": first_value(frame, "gamma"),
         "beta": first_value(frame, "beta"),
         "q_hard_min": first_value(frame, "q_hard_min"),
@@ -743,17 +869,36 @@ def _track_breaks(frame: pd.DataFrame) -> int:
 
 
 def select_params(summary: pd.DataFrame, threshold: pd.DataFrame) -> dict:
-    candidates = summary[summary["scenario"].isin(["S2_tnorm_no_xai", "S3_tnorm_xai", "S2_tnorm_hard", "S3_tnorm_xai_hard", "S2_tnorm_soft", "S3_tnorm_xai_soft", "S4_soft_recovery", "S4_hybrid"])].copy()
+    candidates = summary[
+        summary["scenario"].isin(
+            [
+                "S2_tnorm_no_xai",
+                "S3_tnorm_xai",
+                "S2_tnorm_hard",
+                "S3_tnorm_xai_hard",
+                "S2_tnorm_soft",
+                "S3_tnorm_xai_soft",
+                "S4_soft_recovery",
+                "S4_hybrid",
+                "S2_tnorm_soft_v2",
+                "S2_tnorm_newgate",
+                "S2_tnorm_adaptive",
+            ]
+        )
+    ].copy()
     candidates = candidates[candidates["implementation_status"].fillna("ok") == "ok"]
     naive = summary[summary["scenario"] == "S_naive"].copy()
     if candidates.empty or naive.empty:
         return {"selection_status": "not_selected", "holdout_allowed": False, "reason": "missing_candidates"}
     naive_best = naive.sort_values(["IDF1", "F1"], ascending=False).iloc[0]
-    fn_limit = float(naive_best["FN"]) * 1.05
+    has_v3 = candidates["scenario"].isin(["S2_tnorm_soft_v2", "S2_tnorm_newgate", "S2_tnorm_adaptive"]).any()
+    fn_limit = float(naive_best["FN"]) * (1.01 if has_v3 else 1.05)
+    f1_floor = float(naive_best["F1"]) - (0.0005 if has_v3 else 0.005)
+    break_limit = float(naive_best["track_breaks"]) * (1.01 if has_v3 else 1.0)
     valid = candidates[
-        (candidates["F1"] >= naive_best["F1"] - 0.005)
+        (candidates["F1"] >= f1_floor)
         & (candidates["IDSW"] <= naive_best["IDSW"])
-        & (candidates["track_breaks"] <= naive_best["track_breaks"])
+        & (candidates["track_breaks"] <= break_limit)
         & (candidates["FP"] < naive_best["FP"])
         & (candidates["FN"] <= fn_limit)
     ].copy()
@@ -765,13 +910,20 @@ def select_params(summary: pd.DataFrame, threshold: pd.DataFrame) -> dict:
             "baseline_s_naive_IDF1": float(naive_best["IDF1"]),
             "baseline_s_naive_F1": float(naive_best["F1"]),
         }
-    valid["score"] = (
-        0.30 * valid["IDF1"]
-        + 0.25 * valid["F1"]
-        - 0.15 * valid["IDSW"].fillna(0) / max(1, valid["num_detections_before_filter"].max())
-        - 0.15 * valid["track_breaks"].fillna(0) / max(1, valid["num_detections_before_filter"].max())
-        - 0.10 * valid["FP_per_100_frames"].fillna(0) / 100.0
-    )
+    if has_v3:
+        valid["score"] = (
+            0.50 * ((naive_best["FP"] - valid["FP"]) / max(1, naive_best["FP"]))
+            - 0.35 * ((valid["FN"] - naive_best["FN"]).clip(lower=0) / max(1, naive_best["FN"]))
+            + 0.15 * (valid["F1"] - naive_best["F1"])
+        )
+    else:
+        valid["score"] = (
+            0.30 * valid["IDF1"]
+            + 0.25 * valid["F1"]
+            - 0.15 * valid["IDSW"].fillna(0) / max(1, valid["num_detections_before_filter"].max())
+            - 0.15 * valid["track_breaks"].fillna(0) / max(1, valid["num_detections_before_filter"].max())
+            - 0.10 * valid["FP_per_100_frames"].fillna(0) / 100.0
+        )
     best = valid.sort_values("score", ascending=False).iloc[0]
     return {
         "selection_status": "selected",
@@ -781,6 +933,10 @@ def select_params(summary: pd.DataFrame, threshold: pd.DataFrame) -> dict:
         "selected_tau_Q": None if pd.isna(best.get("tau_Q")) else float(best["tau_Q"]),
         "selected_reweight_mode": first_value(best.to_frame().T, "reweight_mode"),
         "selected_q_floor": first_value(best.to_frame().T, "q_floor"),
+        "selected_q_floor_new": first_value(best.to_frame().T, "q_floor_new"),
+        "selected_q_floor_existing": first_value(best.to_frame().T, "q_floor_existing"),
+        "selected_q_new_mode": first_value(best.to_frame().T, "q_new_mode"),
+        "selected_q_new_min": first_value(best.to_frame().T, "q_new_min"),
         "selected_gamma": first_value(best.to_frame().T, "gamma"),
         "selected_q_hard_min": first_value(best.to_frame().T, "q_hard_min"),
         "selected_new_track_threshold": first_value(best.to_frame().T, "new_track_threshold"),
@@ -788,7 +944,10 @@ def select_params(summary: pd.DataFrame, threshold: pd.DataFrame) -> dict:
         "x_i_selected_method": "x_top5_inside",
         "xai_method": "eigencam",
         "score": float(best["score"]),
-        "reason": "soft_reweighting_reduces_fp_without_recall_collapse",
+        "FP_delta_vs_S_naive": int(best["FP"] - naive_best["FP"]),
+        "FN_delta_vs_S_naive": int(best["FN"] - naive_best["FN"]),
+        "F1_delta_vs_S_naive": float(best["F1"] - naive_best["F1"]),
+        "reason": "adaptive_new_track_gating_reduces_fp_without_recall_collapse" if has_v3 else "soft_reweighting_reduces_fp_without_recall_collapse",
     }
 
 
@@ -840,6 +999,74 @@ def new_track_suppression(summary: pd.DataFrame, features: pd.DataFrame) -> pd.D
                 "suppressed_TP_rate": max(0, suppressed - suppressed_fp) / max(1, suppressed),
             }
         )
+    return pd.DataFrame(rows)
+
+
+def new_track_gate_summary(summary: pd.DataFrame, feature_frames: list[pd.DataFrame]) -> pd.DataFrame:
+    naive = summary[summary["scenario"] == "S_naive"].sort_values(["F1", "IDF1"], ascending=False)
+    base = naive.iloc[0] if len(naive) else None
+    rows = []
+    for frame in feature_frames:
+        if frame.empty or "scenario" not in frame:
+            continue
+        scenario = str(frame["scenario"].iloc[0])
+        if scenario not in {"S2_tnorm_soft_v2", "S2_tnorm_newgate", "S2_tnorm_adaptive"}:
+            continue
+        is_new = frame["track_status"].eq("new_candidate")
+        is_tp = frame["eval_is_tp"].astype(bool)
+        suppressed = is_new & ~frame["accepted"].astype(bool)
+        metric = _summary(frame, scenario, first_value(frame, "t_norm"), None, int(frame[["sequence_id", "frame_id"]].drop_duplicates().shape[0]))
+        rows.append(
+            {
+                "scenario": scenario,
+                "q_new_mode": first_value(frame, "q_new_mode"),
+                "q_floor_new": first_value(frame, "q_floor_new"),
+                "q_floor_existing": first_value(frame, "q_floor_existing"),
+                "new_track_threshold": first_value(frame, "new_track_threshold"),
+                "existing_track_threshold": first_value(frame, "existing_track_threshold"),
+                "q_new_min": first_value(frame, "q_new_min"),
+                "num_new_track_candidates": int(is_new.sum()),
+                "new_track_TP_candidates": int((is_new & is_tp).sum()),
+                "new_track_FP_candidates": int((is_new & ~is_tp).sum()),
+                "suppressed_TP": int((suppressed & is_tp).sum()),
+                "suppressed_FP": int((suppressed & ~is_tp).sum()),
+                "suppressed_FP_rate": int((suppressed & ~is_tp).sum()) / max(1, int(suppressed.sum())),
+                "suppressed_TP_rate": int((suppressed & is_tp).sum()) / max(1, int(suppressed.sum())),
+                "created_tracks": int((is_new & frame["accepted"].astype(bool)).sum()),
+                "FP_delta_vs_S_naive": None if base is None else int(metric["FP"] - base["FP"]),
+                "FN_delta_vs_S_naive": None if base is None else int(metric["FN"] - base["FN"]),
+                "F1_delta_vs_S_naive": None if base is None else float(metric["F1"] - base["F1"]),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def candidate_score_distribution(feature_frames: list[pd.DataFrame]) -> pd.DataFrame:
+    rows = []
+    for frame in feature_frames:
+        if frame.empty or "scenario" not in frame or "Q_new" not in frame:
+            continue
+        scenario = str(frame["scenario"].iloc[0])
+        if scenario not in {"S2_tnorm_soft_v2", "S2_tnorm_newgate", "S2_tnorm_adaptive"}:
+            continue
+        for (status, is_tp, q_mode), group in frame.groupby(["track_status", "eval_is_tp", "q_new_mode"], dropna=False):
+            q = group["Q_new"]
+            rows.append(
+                {
+                    "scenario": scenario,
+                    "track_status": status,
+                    "eval_is_tp": bool(is_tp),
+                    "q_new_mode": q_mode,
+                    "mean_Q_new": float(q.mean()),
+                    "p05_Q_new": float(q.quantile(0.05)),
+                    "p25_Q_new": float(q.quantile(0.25)),
+                    "p50_Q_new": float(q.quantile(0.50)),
+                    "p75_Q_new": float(q.quantile(0.75)),
+                    "p95_Q_new": float(q.quantile(0.95)),
+                    "mean_confidence": float(group["confidence_original"].mean() if "confidence_original" in group else group["confidence"].mean()),
+                    "mean_confidence_new": float(group["confidence_new"].mean() if "confidence_new" in group else group["confidence"].mean()),
+                }
+            )
     return pd.DataFrame(rows)
 
 

@@ -55,6 +55,7 @@ def main() -> None:
     delta.to_csv(root / delta_name, index=False)
 
     candidate = delta[delta["scenario"] == "S2_tnorm_soft"]
+    raw_candidate = best_row(summary, "S2_tnorm_soft")
     if candidate.empty:
         selected = {
             "selection_status": "not_selected",
@@ -73,12 +74,12 @@ def main() -> None:
             "holdout_allowed": bool(strict or soft),
             "success_flag": bool(strict or soft) if split == "holdout" else None,
             "selected_scenario": "S2_tnorm_soft",
-            "selected_t_norm": "min",
-            "selected_reweight_mode": "multiplicative_floor",
-            "selected_q_floor": 0.6,
-            "selected_q_hard_min": 0.0,
-            "selected_new_track_threshold": 0.4,
-            "selected_existing_track_threshold": 0.05,
+            "selected_t_norm": _value(raw_candidate, "t_norm", "min"),
+            "selected_reweight_mode": _value(raw_candidate, "reweight_mode", "multiplicative_floor"),
+            "selected_q_floor": _value(raw_candidate, "q_floor", 0.6),
+            "selected_q_hard_min": _value(raw_candidate, "q_hard_min", 0.0),
+            "selected_new_track_threshold": _value(raw_candidate, "new_track_threshold", 0.4),
+            "selected_existing_track_threshold": _value(raw_candidate, "existing_track_threshold", 0.05),
             "source_stage": source_stage,
             "reason": (
                 "holdout_confirms_fp_reduction_without_recall_loss"
@@ -97,6 +98,13 @@ def main() -> None:
         }
     (root / "selected_params.yaml").write_text(yaml.safe_dump(selected, sort_keys=False), encoding="utf-8")
     print(yaml.safe_dump(selected, sort_keys=False))
+
+
+def _value(row: pd.Series, key: str, default):
+    value = row.get(key, default)
+    if pd.isna(value):
+        return default
+    return value.item() if hasattr(value, "item") else value
 
 
 if __name__ == "__main__":
