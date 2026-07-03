@@ -9,6 +9,7 @@ import yaml
 from defense4uavswarm.datasets.visdrone import VISDRONE_CLASSES, VisDroneDataset
 from defense4uavswarm.matrix import load_split_sequences
 from defense4uavswarm.swarm import compute_inter_agent_consistency, load_frame_index, transform_bbox
+from defense4uavswarm.xai import compute_cam, compute_xai_score, select_xai_candidates
 
 
 def run_swarm_tnorm_smoke(
@@ -20,6 +21,9 @@ def run_swarm_tnorm_smoke(
     t_norms: list[str],
     output_dir: str | Path,
     limit_sequences: int | None = None,
+    xai_method: str = "eigencam",
+    xai_max_per_frame: int = 5,
+    semantic_max_frames: int | None = None,
 ) -> None:
     swarm_cfg = _load_yaml(swarm_config)
     root = Path(swarm_cfg["output_root"]) / split
@@ -42,6 +46,13 @@ def run_swarm_tnorm_smoke(
     features["eps"] = eps_values[0] if eps_values else 0.0
     features["k_i"] = 1.0
     features["x_i"] = 1.0
+    features["x_i_available"] = False
+    features["xai_called"] = False
+    features["xai_method"] = None
+    xai_audit = pd.DataFrame()
+    xai_summary = pd.DataFrame()
+    if any(s.lower() in {"s3_tnorm_xai", "s3"} for s in scenarios):
+        features, xai_audit, xai_summary = apply_xai_smoke(features, frame_index, xai_method, xai_max_per_frame, semantic_max_frames)
     rows = []
     threshold_rows = []
     feature_frames = []
@@ -76,9 +87,23 @@ def run_swarm_tnorm_smoke(
                 rows.append(_summary(frame, "S2_tnorm_no_xai", norm, 0.3))
                 feature_frames.append(frame)
                 threshold_rows.append({"scenario": "S2_tnorm_no_xai", "t_norm": norm, "tau_Q": 0.3, "selected": True})
+        elif scenario.lower() in {"s3_tnorm_xai", "s3"}:
+            for norm in t_norms:
+                frame = features.copy()
+                frame["scenario"] = "S3_tnorm_xai"
+                frame["t_norm"] = norm
+                frame["tau_Q"] = 0.3
+                frame["Q_i"] = _q(frame, norm)
+                frame["accepted"] = frame["Q_i"] >= 0.3
+                rows.append(_summary(frame, "S3_tnorm_xai", norm, 0.3))
+                feature_frames.append(frame)
+                threshold_rows.append({"scenario": "S3_tnorm_xai", "t_norm": norm, "tau_Q": 0.3, "selected": True})
     audit = pd.concat(feature_frames, ignore_index=True) if feature_frames else features
     audit.to_csv(out / "swarm_feature_audit.csv", index=False)
     matches.to_csv(out / "inter_agent_matching_audit.csv", index=False)
+    if len(xai_audit):
+        xai_audit.to_csv(out / "xai_feature_audit.csv", index=False)
+        xai_summary.to_csv(out / "xai_summary.csv", index=False)
     pd.DataFrame(rows).to_csv(out / "summary_metrics.csv", index=False)
     pd.DataFrame(rows).to_csv(out / "research_matrix.csv", index=False)
     pd.DataFrame(threshold_rows).to_csv(out / "threshold_selection.csv", index=False)
@@ -86,12 +111,18 @@ def run_swarm_tnorm_smoke(
     (out / "metadata.json").write_text(
         json.dumps(
             {
-                "stage": "v2_smoke_s2",
+                "stage": "v2.3_xai_smoke" if len(xai_audit) else "v2_smoke_s2",
                 "dataset_type": "pseudo_swarm",
                 "split": split,
                 "num_agents": int(frame_index["agent_id"].nunique()),
                 "num_synchronized_frames": int(frame_index.groupby(["sequence_id", "frame_id"])["agent_id"].nunique().eq(frame_index["agent_id"].nunique()).sum()),
-                "xai_enabled": False,
+                "xai_enabled": bool(len(xai_audit)),
+                "xai_method_requested": xai_method,
+                "xai_method_used": xai_method if len(xai_audit) else None,
+                "gradcam_status": "not_attempted_or_failed" if xai_method == "eigencam" else "fallback_not_used",
+                "xai_candidate_policy": {"c_low": 0.5, "sigma_k": 0.3, "sigma_s": 0.3, "tau_pre": 0.3, "M_xai": xai_max_per_frame},
+                "x_i_formula": "sum(CAM inside bbox) / sum(CAM over image)",
+                "x_i_neutral_when_not_called": 1.0,
                 "s_missing_policy": "neutral",
             },
             indent=2,
@@ -102,6 +133,94 @@ def run_swarm_tnorm_smoke(
     print(f"output: {out}")
     print(f"mean_s_i: {features['s_i'].mean():.4f}")
     print(f"s2_rejected: {int((audit[audit['scenario'] == 'S2_tnorm_no_xai']['accepted'] == False).sum())}")
+    if len(xai_summary):
+        print(f"num_xai_called: {int(xai_summary.iloc[0]['num_xai_called'])}")
+        print(f"mean_x_i: {float(xai_summary.iloc[0]['mean_x_i']):.4f}")
+
+
+def apply_xai_smoke(features: pd.DataFrame, frame_index: pd.DataFrame, method: str, max_per_frame: int, max_frames: int | None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    out = features.copy()
+    out["Q_pre"] = out[["c_i", "k_i", "s_i"]].min(axis=1)
+    out["risk"] = (1.0 - out["c_i"]) + (1.0 - out["k_i"]) + (1.0 - out["s_i"])
+    image_paths = frame_index.set_index(["sequence_id", "frame_id", "agent_id"])["image_path"].to_dict()
+    audit_rows = []
+    frame_count = 0
+    for key, group in out.groupby(["sequence_id", "frame_id", "agent_id"], sort=False):
+        if max_frames is not None and frame_count >= max_frames:
+            break
+        candidates = select_xai_candidates(group, max_per_frame=max_per_frame)
+        if candidates.empty:
+            candidates = group.sort_values("risk", ascending=False).head(1)
+        if candidates.empty:
+            continue
+        cam, latency = compute_cam(image_paths[key], method=method)
+        for rank, (idx, row) in enumerate(candidates.iterrows(), start=1):
+            x_i, inside, total = compute_xai_score(cam, (row.x1, row.y1, row.x2, row.y2))
+            available = x_i is not None
+            value = float(x_i) if available else 1.0
+            out.loc[idx, "x_i"] = value
+            out.loc[idx, "x_i_available"] = available
+            out.loc[idx, "xai_called"] = True
+            out.loc[idx, "xai_method"] = method
+            audit_rows.append(
+                {
+                    "sequence_id": row.sequence_id,
+                    "frame_id": row.frame_id,
+                    "agent_id": row.agent_id,
+                    "det_id": row.det_id,
+                    "track_id": row.track_id,
+                    "scenario": "S3_tnorm_xai",
+                    "model_name": "pseudo_yolo",
+                    "eps": row.eps,
+                    "xai_method": method,
+                    "xai_called": True,
+                    "xai_available": available,
+                    "xai_rank_in_frame": rank,
+                    "confidence": row.confidence,
+                    "c_i": row.c_i,
+                    "k_i": row.k_i,
+                    "s_i": row.s_i,
+                    "Q_pre": row.Q_pre,
+                    "risk": row.risk,
+                    "bbox_x1": row.x1,
+                    "bbox_y1": row.y1,
+                    "bbox_x2": row.x2,
+                    "bbox_y2": row.y2,
+                    "x_i": value,
+                    "xai_energy_inside_bbox": inside,
+                    "xai_total_energy": total,
+                    "xai_latency_ms": latency,
+                    "is_TP": row.track_id != -1,
+                    "is_FP": row.track_id == -1,
+                    "matched_gt_id": row.track_id if row.track_id != -1 else None,
+                    "matched_gt_iou": 1.0 if row.track_id != -1 else 0.0,
+                }
+            )
+        frame_count += 1
+    audit = pd.DataFrame(audit_rows)
+    called = out[out["xai_called"] == True]
+    available = called[called["x_i_available"] == True]
+    summary = pd.DataFrame(
+        [
+            {
+                "xai_method": method,
+                "num_frames": frame_count,
+                "num_detections": len(out),
+                "num_xai_candidates": len(called),
+                "num_xai_called": len(called),
+                "xai_available_rate": len(available) / max(1, len(called)),
+                "mean_x_i": float(available["x_i"].mean()) if len(available) else 0.0,
+                "median_x_i": float(available["x_i"].median()) if len(available) else 0.0,
+                "x_i_min": float(available["x_i"].min()) if len(available) else 0.0,
+                "x_i_max": float(available["x_i"].max()) if len(available) else 0.0,
+                "share_x_i_lt_0_3": float((available["x_i"] < 0.3).mean()) if len(available) else 0.0,
+                "share_x_i_lt_0_5": float((available["x_i"] < 0.5).mean()) if len(available) else 0.0,
+                "mean_xai_latency_ms": float(audit["xai_latency_ms"].mean()) if len(audit) else 0.0,
+                "xai_calls_per_frame": len(called) / max(1, frame_count),
+            }
+        ]
+    )
+    return out, audit, summary
 
 
 def _pseudo_detections(gt: pd.DataFrame, frame_index: pd.DataFrame) -> pd.DataFrame:

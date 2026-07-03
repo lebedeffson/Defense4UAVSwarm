@@ -65,6 +65,7 @@ def main() -> None:
     p.add_argument("--use-selected-defense", default=None)
     p.add_argument("--semantic-diagnostics", action="store_true")
     p.add_argument("--semantic-features", nargs="+", default=["margin", "augmentation", "temporal"])
+    p.add_argument("--xai-method", choices=["eigencam", "gradcam"], default="eigencam")
     p.add_argument("--augmentation-count", type=int, default=3)
     p.add_argument("--semantic-max-frames", type=int, default=30)
     p.add_argument("--xai-max-per-frame", type=int, default=3)
@@ -160,6 +161,9 @@ def main() -> None:
             args.t_norms or ["min", "prod", "lukasiewicz"],
             cfg["outputs"]["results_dir"],
             args.limit_sequences,
+            xai_method=args.xai_method,
+            xai_max_per_frame=args.xai_max_per_frame,
+            semantic_max_frames=args.semantic_max_frames,
         )
         return
     existing_semantic_inputs = (
