@@ -82,6 +82,12 @@ def main() -> None:
     p.add_argument("--weak-confidence-min", nargs="+", type=float, default=None)
     p.add_argument("--weak-iou-min", nargs="+", type=float, default=None)
     p.add_argument("--recovery-cooldown", nargs="+", type=int, default=None)
+    p.add_argument("--reweight-modes", nargs="+", default=None)
+    p.add_argument("--q-floors", nargs="+", type=float, default=None)
+    p.add_argument("--gammas", nargs="+", type=float, default=None)
+    p.add_argument("--q-hard-mins", nargs="+", type=float, default=None)
+    p.add_argument("--new-track-thresholds", nargs="+", type=float, default=None)
+    p.add_argument("--existing-track-thresholds", nargs="+", type=float, default=None)
     args = p.parse_args()
     cfg = load_config(args.config)
     if args.fgsm_loss:
@@ -166,6 +172,12 @@ def main() -> None:
             xai_max_per_frame=args.xai_max_per_frame,
             semantic_max_frames=args.semantic_max_frames,
             pseudo_attack_config=args.pseudo_attack_config,
+            reweight_modes=args.reweight_modes,
+            q_floors=args.q_floors,
+            gammas=args.gammas,
+            q_hard_mins=args.q_hard_mins,
+            new_track_thresholds=args.new_track_thresholds,
+            existing_track_thresholds=args.existing_track_thresholds,
         )
         return
     existing_semantic_inputs = (

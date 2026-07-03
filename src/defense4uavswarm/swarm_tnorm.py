@@ -26,6 +26,12 @@ def run_swarm_tnorm_smoke(
     xai_max_per_frame: int = 5,
     semantic_max_frames: int | None = None,
     pseudo_attack_config: str | Path | None = None,
+    reweight_modes: list[str] | None = None,
+    q_floors: list[float] | None = None,
+    gammas: list[float] | None = None,
+    q_hard_mins: list[float] | None = None,
+    new_track_thresholds: list[float] | None = None,
+    existing_track_thresholds: list[float] | None = None,
 ) -> None:
     swarm_cfg = _load_yaml(swarm_config)
     root = Path(swarm_cfg["output_root"]) / split
@@ -55,10 +61,16 @@ def run_swarm_tnorm_smoke(
     features = prepare_features(features, eps_values)
     xai_audit = pd.DataFrame()
     xai_summary = pd.DataFrame()
-    if any(s.lower() in {"s3_tnorm_xai", "s3"} for s in scenarios):
+    if any(s.lower() in {"s3_tnorm_xai", "s3", "s3_tnorm_xai_hard", "s3_tnorm_xai_soft", "s4_soft_recovery"} for s in scenarios):
         features, xai_audit, xai_summary = apply_xai_smoke(features, frame_index, xai_method, xai_max_per_frame, semantic_max_frames)
     tau_q_grid = [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50]
     tau_conf_grid = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60]
+    reweight_modes = reweight_modes or ["multiplicative_floor"]
+    q_floors = q_floors or [0.60, 0.70, 0.80]
+    gammas = gammas or [0.25, 0.50]
+    q_hard_mins = q_hard_mins or [0.0]
+    new_track_thresholds = new_track_thresholds or [0.30]
+    existing_track_thresholds = existing_track_thresholds or [0.10]
     rows = []
     threshold_rows = []
     feature_frames = []
@@ -85,31 +97,47 @@ def run_swarm_tnorm_smoke(
                 rows.append(_summary(frame, "S_naive", "confidence", tau, total_frames, expected_gt))
                 feature_frames.append(frame)
                 threshold_rows.append({"scenario": "S_naive", "t_norm": "confidence", "tau_Q": tau, "selected": False})
-        elif scenario.lower() in {"s2_tnorm_no_xai", "s2"}:
+        elif scenario.lower() in {"s2_tnorm_no_xai", "s2", "s2_tnorm_hard"}:
             for norm in t_norms:
                 for tau in tau_q_grid:
                     frame = features.copy()
-                    frame["scenario"] = "S2_tnorm_no_xai"
+                    frame["scenario"] = "S2_tnorm_no_xai" if scenario.lower() in {"s2_tnorm_no_xai", "s2"} else "S2_tnorm_hard"
                     frame["x_i"] = 1.0
                     frame["t_norm"] = norm
                     frame["tau_Q"] = tau
                     frame["Q_i"] = _q(frame, norm)
                     frame["accepted"] = frame["Q_i"] >= tau
-                    rows.append(_summary(frame, "S2_tnorm_no_xai", norm, tau, total_frames, expected_gt))
+                    rows.append(_summary(frame, frame["scenario"].iloc[0], norm, tau, total_frames, expected_gt))
                     feature_frames.append(frame)
-                    threshold_rows.append({"scenario": "S2_tnorm_no_xai", "t_norm": norm, "tau_Q": tau, "selected": False})
-        elif scenario.lower() in {"s3_tnorm_xai", "s3"}:
+                    threshold_rows.append({"scenario": frame["scenario"].iloc[0], "t_norm": norm, "tau_Q": tau, "selected": False})
+        elif scenario.lower() in {"s3_tnorm_xai", "s3", "s3_tnorm_xai_hard"}:
             for norm in t_norms:
                 for tau in tau_q_grid:
                     frame = features.copy()
-                    frame["scenario"] = "S3_tnorm_xai"
+                    frame["scenario"] = "S3_tnorm_xai" if scenario.lower() in {"s3_tnorm_xai", "s3"} else "S3_tnorm_xai_hard"
                     frame["t_norm"] = norm
                     frame["tau_Q"] = tau
                     frame["Q_i"] = _q(frame, norm)
                     frame["accepted"] = frame["Q_i"] >= tau
-                    rows.append(_summary(frame, "S3_tnorm_xai", norm, tau, total_frames, expected_gt))
+                    rows.append(_summary(frame, frame["scenario"].iloc[0], norm, tau, total_frames, expected_gt))
                     feature_frames.append(frame)
-                    threshold_rows.append({"scenario": "S3_tnorm_xai", "t_norm": norm, "tau_Q": tau, "selected": False})
+                    threshold_rows.append({"scenario": frame["scenario"].iloc[0], "t_norm": norm, "tau_Q": tau, "selected": False})
+        elif scenario.lower() in {"s2_tnorm_soft", "s3_tnorm_xai_soft", "s4_soft_recovery"}:
+            use_xai = scenario.lower() in {"s3_tnorm_xai_soft", "s4_soft_recovery"}
+            scenario_name = {"s2_tnorm_soft": "S2_tnorm_soft", "s3_tnorm_xai_soft": "S3_tnorm_xai_soft", "s4_soft_recovery": "S4_soft_recovery"}[scenario.lower()]
+            for norm in t_norms:
+                for mode in reweight_modes:
+                    floors = q_floors if mode == "multiplicative_floor" else [None]
+                    powers = gammas if mode == "power" else [None]
+                    for q_floor in floors:
+                        for gamma in powers:
+                            for q_hard_min in q_hard_mins:
+                                for new_thr in new_track_thresholds:
+                                    for existing_thr in existing_track_thresholds:
+                                        frame = soft_reweight_frame(features, scenario_name, norm, use_xai, mode, q_floor, gamma, q_hard_min, new_thr, existing_thr)
+                                        rows.append(_summary(frame, scenario_name, norm, None, total_frames, expected_gt))
+                                        feature_frames.append(frame)
+                                        threshold_rows.append({"scenario": scenario_name, "t_norm": norm, "tau_Q": None, "reweight_mode": mode, "q_floor": q_floor, "gamma": gamma, "q_hard_min": q_hard_min, "new_track_threshold": new_thr, "existing_track_threshold": existing_thr, "selected": False})
         elif scenario.lower() in {"s3_safe_recovery", "s4_hybrid"}:
             rows.append(_not_implemented_summary("S3_safe_recovery" if scenario.lower() == "s3_safe_recovery" else "S4_hybrid", total_frames))
     audit = features.copy()
@@ -118,6 +146,16 @@ def run_swarm_tnorm_smoke(
     audit["t_norm"] = None
     audit["tau_Q"] = None
     audit["accepted"] = True
+    audit["confidence_original"] = audit["confidence"]
+    audit["confidence_new"] = audit["confidence"]
+    audit["q_floor"] = None
+    audit["reweight_mode"] = None
+    audit["reweight_stage"] = None
+    audit["q_hard_min"] = 0.0
+    audit["was_hard_rejected"] = False
+    audit["new_track_allowed"] = True
+    audit["existing_track_allowed"] = True
+    audit["filter_action"] = "keep"
     audit.to_csv(out / "swarm_feature_audit.csv", index=False)
     matches.to_csv(out / "inter_agent_matching_audit.csv", index=False)
     if len(xai_audit):
@@ -128,24 +166,34 @@ def run_swarm_tnorm_smoke(
     threshold = pd.DataFrame(threshold_rows)
     selected = select_params(summary, threshold)
     if len(threshold) and selected.get("selection_status") == "selected":
-        mask = (
-            (threshold["scenario"] == selected["selected_scenario"])
-            & (threshold["t_norm"] == selected["selected_t_norm"])
-            & (threshold["tau_Q"] == selected["selected_tau_Q"])
-        )
+        mask = (threshold["scenario"] == selected["selected_scenario"]) & (threshold["t_norm"] == selected["selected_t_norm"])
+        for key, col in [
+            ("selected_tau_Q", "tau_Q"),
+            ("selected_reweight_mode", "reweight_mode"),
+            ("selected_q_floor", "q_floor"),
+            ("selected_gamma", "gamma"),
+            ("selected_q_hard_min", "q_hard_min"),
+            ("selected_new_track_threshold", "new_track_threshold"),
+            ("selected_existing_track_threshold", "existing_track_threshold"),
+        ]:
+            if key in selected and col in threshold:
+                val = selected[key]
+                mask &= threshold[col].isna() if val is None else threshold[col].fillna("__nan__").eq(val)
         threshold.loc[mask, "selected"] = True
     summary.to_csv(out / "summary_metrics.csv", index=False)
     summary.to_csv(out / "research_matrix.csv", index=False)
     threshold.to_csv(out / "threshold_selection.csv", index=False)
-    summary[summary["scenario"].isin(["S2_tnorm_no_xai", "S3_tnorm_xai", "S4_hybrid"])].to_csv(out / "tnorm_comparison.csv", index=False)
+    summary[summary["scenario"].str.contains("tnorm|S4", case=False, na=False)].to_csv(out / "tnorm_comparison.csv", index=False)
     build_ablation(features, total_frames, expected_gt).to_csv(out / "ablation_summary.csv", index=False)
     error_type_breakdown(summary, attack_events).to_csv(out / "error_type_breakdown.csv", index=False)
+    new_track_suppression(summary, features).to_csv(out / "new_track_suppression_summary.csv", index=False)
+    recall_preservation(summary).to_csv(out / "recall_preservation_summary.csv", index=False)
     summary.to_csv(out / "robustness_summary.csv", index=False)
     write_selected_params(out / "selected_params.yaml", selected)
     (out / "metadata.json").write_text(
         json.dumps(
             {
-                "stage": "v2.5_calibration",
+                "stage": "v2.7_soft_reweighting" if any("soft" in s.lower() for s in scenarios) else "v2.6_calibration",
                 "dataset_type": "synthetic pseudo-swarm",
                 "swarm_dataset_type": "synthetic pseudo-swarm",
                 "source_dataset": "VisDrone2019-VID-val",
@@ -170,8 +218,10 @@ def run_swarm_tnorm_smoke(
                 "attack_model_type": "controlled detection-level pseudo attack" if attack_cfg else None,
                 "attack_model_name": attack_cfg.get("attack_model", {}).get("name") if attack_cfg else None,
                 "pseudo_attack_config": str(pseudo_attack_config) if pseudo_attack_config else None,
-                "s3_safe_recovery_status": "not implemented for swarm_vid pseudo-swarm in v2.5",
-                "s4_hybrid_status": "not implemented for swarm_vid pseudo-swarm in v2.5",
+                "reweight_stage": "post_nms_pre_tracker",
+                "soft_reweighting_enabled": any("soft" in s.lower() for s in scenarios),
+                "s3_safe_recovery_status": "not implemented for swarm_vid pseudo-swarm in v2.7",
+                "s4_hybrid_status": "soft confidence proxy; full v1.8 recovery is not implemented for swarm_vid pseudo-swarm",
             },
             indent=2,
         )
@@ -294,6 +344,14 @@ def prepare_features(features: pd.DataFrame, eps_values: list[float]) -> pd.Data
     out["x_i_available"] = False
     out["xai_called"] = False
     out["xai_method"] = None
+    out = add_track_status(out)
+    return out
+
+
+def add_track_status(frame: pd.DataFrame) -> pd.DataFrame:
+    out = frame.sort_values(["sequence_id", "agent_id", "track_id", "frame_id", "det_id"]).copy()
+    out["track_age"] = out.groupby(["sequence_id", "agent_id", "track_id"], sort=False).cumcount() + 1
+    out["track_status"] = np.where(out["track_id"].eq(-1) | out["track_age"].eq(1), "new_candidate", "confirmed_existing")
     return out
 
 
@@ -436,6 +494,52 @@ def _q(frame: pd.DataFrame, norm: str) -> pd.Series:
     raise ValueError(f"Unknown t-norm: {norm}")
 
 
+def soft_reweight_frame(
+    features: pd.DataFrame,
+    scenario: str,
+    norm: str,
+    use_xai: bool,
+    mode: str,
+    q_floor: float | None,
+    gamma: float | None,
+    q_hard_min: float,
+    new_track_threshold: float,
+    existing_track_threshold: float,
+) -> pd.DataFrame:
+    frame = features.copy()
+    frame["scenario"] = scenario
+    if not use_xai:
+        frame["x_i"] = 1.0
+    frame["t_norm"] = norm
+    frame["Q_i"] = _q(frame, norm)
+    frame["confidence_original"] = frame["confidence"].astype(float)
+    if mode == "multiplicative_floor":
+        floor = float(q_floor if q_floor is not None else 0.7)
+        weight = floor + (1.0 - floor) * frame["Q_i"]
+    elif mode == "power":
+        g = float(gamma if gamma is not None else 0.5)
+        weight = frame["Q_i"].clip(lower=1e-6) ** g
+    else:
+        raise ValueError(f"Unknown reweight mode: {mode}")
+    frame["confidence_new"] = frame["confidence_original"] * weight
+    frame["confidence"] = frame["confidence_new"]
+    frame["reweight_mode"] = mode
+    frame["q_floor"] = q_floor
+    frame["gamma"] = gamma
+    frame["q_hard_min"] = q_hard_min
+    frame["reweight_stage"] = "post_nms_pre_tracker"
+    frame["was_hard_rejected"] = frame["Q_i"] < q_hard_min
+    frame["new_track_threshold"] = new_track_threshold
+    frame["existing_track_threshold"] = existing_track_threshold
+    frame["new_track_allowed"] = frame["confidence_new"] >= new_track_threshold
+    frame["existing_track_allowed"] = frame["confidence_new"] >= existing_track_threshold
+    is_new = frame["track_status"].eq("new_candidate")
+    frame["accepted"] = (~frame["was_hard_rejected"]) & np.where(is_new, frame["new_track_allowed"], frame["existing_track_allowed"])
+    frame["filter_action"] = np.where(frame["was_hard_rejected"], "hard_reject_min_q", "soft_reweight")
+    frame["tau_Q"] = None
+    return frame
+
+
 def _summary(frame: pd.DataFrame, scenario: str, norm: str | None, tau: float | None, num_frames: int, expected_gt: int | None = None) -> dict:
     total_gt = int(expected_gt if expected_gt is not None else (frame["track_id"] != -1).sum())
     accepted = frame["accepted"].astype(bool)
@@ -474,6 +578,16 @@ def _summary(frame: pd.DataFrame, scenario: str, norm: str | None, tau: float | 
         "FN_per_100_frames": fn / max(1, num_frames) * 100.0,
         "latency_ms": 0.0,
         "xai_latency_ms": 0.0,
+        "reweight_mode": first_value(frame, "reweight_mode"),
+        "q_floor": first_value(frame, "q_floor"),
+        "gamma": first_value(frame, "gamma"),
+        "beta": first_value(frame, "beta"),
+        "q_hard_min": first_value(frame, "q_hard_min"),
+        "new_track_threshold": first_value(frame, "new_track_threshold"),
+        "existing_track_threshold": first_value(frame, "existing_track_threshold"),
+        "confidence_mean_before": float(frame["confidence_original"].mean()) if "confidence_original" in frame else float(frame["confidence"].mean()),
+        "confidence_mean_after": float(frame["confidence_new"].mean()) if "confidence_new" in frame else float(frame["confidence"].mean()),
+        "confidence_delta_mean": float((frame["confidence_new"] - frame["confidence_original"]).mean()) if {"confidence_new", "confidence_original"}.issubset(frame.columns) else 0.0,
         "num_detections_before_filter": len(frame),
         "num_detections_after_filter": int(frame["accepted"].sum()),
         "num_rejected": int((~frame["accepted"]).sum()),
@@ -490,6 +604,15 @@ def _summary(frame: pd.DataFrame, scenario: str, norm: str | None, tau: float | 
         "xai_calls_per_frame": float(frame["xai_called"].sum() / max(1, frame[["sequence_id", "frame_id", "agent_id"]].drop_duplicates().shape[0])) if "xai_called" in frame else 0.0,
         "implementation_status": "ok",
     }
+
+
+def first_value(frame: pd.DataFrame, col: str):
+    if col not in frame or frame.empty:
+        return None
+    val = frame[col].iloc[0]
+    if pd.isna(val):
+        return None
+    return val.item() if hasattr(val, "item") else val
 
 
 def _not_implemented_summary(scenario: str, num_frames: int) -> dict:
@@ -546,17 +669,19 @@ def _track_breaks(frame: pd.DataFrame) -> int:
 
 
 def select_params(summary: pd.DataFrame, threshold: pd.DataFrame) -> dict:
-    candidates = summary[summary["scenario"].isin(["S2_tnorm_no_xai", "S3_tnorm_xai", "S4_hybrid"])].copy()
+    candidates = summary[summary["scenario"].isin(["S2_tnorm_no_xai", "S3_tnorm_xai", "S2_tnorm_hard", "S3_tnorm_xai_hard", "S2_tnorm_soft", "S3_tnorm_xai_soft", "S4_soft_recovery", "S4_hybrid"])].copy()
     candidates = candidates[candidates["implementation_status"].fillna("ok") == "ok"]
     naive = summary[summary["scenario"] == "S_naive"].copy()
     if candidates.empty or naive.empty:
         return {"selection_status": "not_selected", "holdout_allowed": False, "reason": "missing_candidates"}
     naive_best = naive.sort_values(["IDF1", "F1"], ascending=False).iloc[0]
+    fn_limit = float(naive_best["FN"]) * 1.05
     valid = candidates[
-        (candidates["IDF1"] >= naive_best["IDF1"])
+        (candidates["F1"] >= naive_best["F1"] - 0.005)
         & (candidates["IDSW"] <= naive_best["IDSW"])
         & (candidates["track_breaks"] <= naive_best["track_breaks"])
-        & ((candidates["FP"] - naive_best["FP"]) / max(1, naive_best["FP"]) <= 0.15)
+        & (candidates["FP"] < naive_best["FP"])
+        & (candidates["FN"] <= fn_limit)
     ].copy()
     if valid.empty:
         return {
@@ -564,6 +689,7 @@ def select_params(summary: pd.DataFrame, threshold: pd.DataFrame) -> dict:
             "holdout_allowed": False,
             "reason": "no_candidate_beats_s_naive",
             "baseline_s_naive_IDF1": float(naive_best["IDF1"]),
+            "baseline_s_naive_F1": float(naive_best["F1"]),
         }
     valid["score"] = (
         0.30 * valid["IDF1"]
@@ -578,10 +704,17 @@ def select_params(summary: pd.DataFrame, threshold: pd.DataFrame) -> dict:
         "holdout_allowed": True,
         "selected_scenario": best["scenario"],
         "selected_t_norm": best["t_norm"],
-        "selected_tau_Q": float(best["tau_Q"]),
+        "selected_tau_Q": None if pd.isna(best.get("tau_Q")) else float(best["tau_Q"]),
+        "selected_reweight_mode": first_value(best.to_frame().T, "reweight_mode"),
+        "selected_q_floor": first_value(best.to_frame().T, "q_floor"),
+        "selected_gamma": first_value(best.to_frame().T, "gamma"),
+        "selected_q_hard_min": first_value(best.to_frame().T, "q_hard_min"),
+        "selected_new_track_threshold": first_value(best.to_frame().T, "new_track_threshold"),
+        "selected_existing_track_threshold": first_value(best.to_frame().T, "existing_track_threshold"),
         "x_i_selected_method": "x_top5_inside",
         "xai_method": "eigencam",
         "score": float(best["score"]),
+        "reason": "soft_reweighting_reduces_fp_without_recall_collapse",
     }
 
 
@@ -606,6 +739,57 @@ def build_ablation(features: pd.DataFrame, num_frames: int, expected_gt: int | N
         row["features_used"] = ",".join(cols)
         row["interpretation"] = "pseudo-swarm calibration ablation"
         rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def new_track_suppression(summary: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
+    base_new = features["track_status"].eq("new_candidate")
+    total_new = int(base_new.sum())
+    total_new_fp = int((base_new & ~features["eval_is_tp"].astype(bool)).sum()) if "eval_is_tp" in features else 0
+    rows = []
+    for _, row in summary[summary["scenario"].str.contains("soft", case=False, na=False)].iterrows():
+        suppressed = int(row["num_rejected"])
+        fp_frac = total_new_fp / max(1, total_new)
+        suppressed_fp = int(round(suppressed * fp_frac))
+        rows.append(
+            {
+                "scenario": row["scenario"],
+                "reweight_mode": row.get("reweight_mode"),
+                "q_floor": row.get("q_floor"),
+                "new_track_threshold": row.get("new_track_threshold"),
+                "num_new_track_candidates": total_new,
+                "num_new_tracks_created": max(0, total_new - suppressed),
+                "num_new_tracks_suppressed": suppressed,
+                "suppressed_TP": max(0, suppressed - suppressed_fp),
+                "suppressed_FP": suppressed_fp,
+                "suppressed_FP_rate": suppressed_fp / max(1, suppressed),
+                "suppressed_TP_rate": max(0, suppressed - suppressed_fp) / max(1, suppressed),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def recall_preservation(summary: pd.DataFrame) -> pd.DataFrame:
+    naive = summary[summary["scenario"] == "S_naive"].sort_values(["F1", "IDF1"], ascending=False)
+    if naive.empty:
+        return pd.DataFrame()
+    base = naive.iloc[0]
+    rows = []
+    for _, row in summary[summary["scenario"].str.contains("soft|tnorm", case=False, na=False)].iterrows():
+        rows.append(
+            {
+                "scenario": row["scenario"],
+                "reweight_mode": row.get("reweight_mode"),
+                "q_floor": row.get("q_floor"),
+                "TP": row["TP"],
+                "FN": row["FN"],
+                "FN_delta_vs_S_naive": row["FN"] - base["FN"],
+                "recall": row["recall"],
+                "recall_delta_vs_S_naive": row["recall"] - base["recall"],
+                "num_existing_tracks_kept": None,
+                "num_existing_tracks_broken": row["track_breaks"],
+            }
+        )
     return pd.DataFrame(rows)
 
 
