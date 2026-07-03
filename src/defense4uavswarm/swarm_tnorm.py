@@ -55,9 +55,12 @@ def run_swarm_tnorm_smoke(
     xai_summary = pd.DataFrame()
     if any(s.lower() in {"s3_tnorm_xai", "s3"} for s in scenarios):
         features, xai_audit, xai_summary = apply_xai_smoke(features, frame_index, xai_method, xai_max_per_frame, semantic_max_frames)
+    tau_q_grid = [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50]
+    tau_conf_grid = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60]
     rows = []
     threshold_rows = []
     feature_frames = []
+    total_frames = int(frame_index[["sequence_id", "frame_id"]].drop_duplicates().shape[0])
     for scenario in scenarios:
         if scenario.lower() in {"s0", "s0_clean", "s1", "s1_fgsm"}:
             frame = features.copy()
@@ -66,69 +69,102 @@ def run_swarm_tnorm_smoke(
             frame["t_norm"] = None
             frame["tau_Q"] = None
             frame["accepted"] = True
-            rows.append(_summary(frame, str(frame["scenario"].iloc[0]), None, None))
+            rows.append(_summary(frame, str(frame["scenario"].iloc[0]), None, None, total_frames))
             feature_frames.append(frame)
         elif scenario.lower() in {"s_naive", "snaive"}:
-            frame = features.copy()
-            frame["scenario"] = "S_naive"
-            frame["Q_i"] = frame["c_i"]
-            frame["t_norm"] = "confidence"
-            frame["tau_Q"] = 0.5
-            frame["accepted"] = frame["Q_i"] >= 0.5
-            rows.append(_summary(frame, "S_naive", "confidence", 0.5))
-            feature_frames.append(frame)
-            threshold_rows.append({"scenario": "S_naive", "t_norm": "confidence", "tau_Q": 0.5, "selected": True})
+            for tau in tau_conf_grid:
+                frame = features.copy()
+                frame["scenario"] = "S_naive"
+                frame["Q_i"] = frame["c_i"]
+                frame["t_norm"] = "confidence"
+                frame["tau_Q"] = tau
+                frame["accepted"] = frame["Q_i"] >= tau
+                rows.append(_summary(frame, "S_naive", "confidence", tau, total_frames))
+                feature_frames.append(frame)
+                threshold_rows.append({"scenario": "S_naive", "t_norm": "confidence", "tau_Q": tau, "selected": False})
         elif scenario.lower() in {"s2_tnorm_no_xai", "s2"}:
             for norm in t_norms:
-                frame = features.copy()
-                frame["scenario"] = "S2_tnorm_no_xai"
-                frame["t_norm"] = norm
-                frame["tau_Q"] = 0.3
-                frame["Q_i"] = _q(frame, norm)
-                frame["accepted"] = frame["Q_i"] >= 0.3
-                rows.append(_summary(frame, "S2_tnorm_no_xai", norm, 0.3))
-                feature_frames.append(frame)
-                threshold_rows.append({"scenario": "S2_tnorm_no_xai", "t_norm": norm, "tau_Q": 0.3, "selected": True})
+                for tau in tau_q_grid:
+                    frame = features.copy()
+                    frame["scenario"] = "S2_tnorm_no_xai"
+                    frame["x_i"] = 1.0
+                    frame["t_norm"] = norm
+                    frame["tau_Q"] = tau
+                    frame["Q_i"] = _q(frame, norm)
+                    frame["accepted"] = frame["Q_i"] >= tau
+                    rows.append(_summary(frame, "S2_tnorm_no_xai", norm, tau, total_frames))
+                    feature_frames.append(frame)
+                    threshold_rows.append({"scenario": "S2_tnorm_no_xai", "t_norm": norm, "tau_Q": tau, "selected": False})
         elif scenario.lower() in {"s3_tnorm_xai", "s3"}:
             for norm in t_norms:
-                frame = features.copy()
-                frame["scenario"] = "S3_tnorm_xai"
-                frame["t_norm"] = norm
-                frame["tau_Q"] = 0.3
-                frame["Q_i"] = _q(frame, norm)
-                frame["accepted"] = frame["Q_i"] >= 0.3
-                rows.append(_summary(frame, "S3_tnorm_xai", norm, 0.3))
-                feature_frames.append(frame)
-                threshold_rows.append({"scenario": "S3_tnorm_xai", "t_norm": norm, "tau_Q": 0.3, "selected": True})
-    audit = pd.concat(feature_frames, ignore_index=True) if feature_frames else features
+                for tau in tau_q_grid:
+                    frame = features.copy()
+                    frame["scenario"] = "S3_tnorm_xai"
+                    frame["t_norm"] = norm
+                    frame["tau_Q"] = tau
+                    frame["Q_i"] = _q(frame, norm)
+                    frame["accepted"] = frame["Q_i"] >= tau
+                    rows.append(_summary(frame, "S3_tnorm_xai", norm, tau, total_frames))
+                    feature_frames.append(frame)
+                    threshold_rows.append({"scenario": "S3_tnorm_xai", "t_norm": norm, "tau_Q": tau, "selected": False})
+        elif scenario.lower() in {"s3_safe_recovery", "s4_hybrid"}:
+            rows.append(_not_implemented_summary("S3_safe_recovery" if scenario.lower() == "s3_safe_recovery" else "S4_hybrid", total_frames))
+    audit = features.copy()
+    audit["scenario"] = "S1_fgsm_base_features"
+    audit["Q_i"] = audit["c_i"]
+    audit["t_norm"] = None
+    audit["tau_Q"] = None
+    audit["accepted"] = True
     audit.to_csv(out / "swarm_feature_audit.csv", index=False)
     matches.to_csv(out / "inter_agent_matching_audit.csv", index=False)
     if len(xai_audit):
         xai_audit.to_csv(out / "xai_feature_audit.csv", index=False)
         xai_summary.to_csv(out / "xai_summary.csv", index=False)
         xai_score_auc(xai_audit).to_csv(out / "xai_score_auc.csv", index=False)
-    pd.DataFrame(rows).to_csv(out / "summary_metrics.csv", index=False)
-    pd.DataFrame(rows).to_csv(out / "research_matrix.csv", index=False)
-    pd.DataFrame(threshold_rows).to_csv(out / "threshold_selection.csv", index=False)
-    pd.DataFrame([r for r in rows if r["scenario"] in {"S2_tnorm_no_xai", "S3_tnorm_xai"}]).to_csv(out / "tnorm_comparison.csv", index=False)
+    summary = pd.DataFrame(rows)
+    threshold = pd.DataFrame(threshold_rows)
+    selected = select_params(summary, threshold)
+    if len(threshold) and selected.get("selection_status") == "selected":
+        mask = (
+            (threshold["scenario"] == selected["selected_scenario"])
+            & (threshold["t_norm"] == selected["selected_t_norm"])
+            & (threshold["tau_Q"] == selected["selected_tau_Q"])
+        )
+        threshold.loc[mask, "selected"] = True
+    summary.to_csv(out / "summary_metrics.csv", index=False)
+    summary.to_csv(out / "research_matrix.csv", index=False)
+    threshold.to_csv(out / "threshold_selection.csv", index=False)
+    summary[summary["scenario"].isin(["S2_tnorm_no_xai", "S3_tnorm_xai", "S4_hybrid"])].to_csv(out / "tnorm_comparison.csv", index=False)
+    build_ablation(features, total_frames).to_csv(out / "ablation_summary.csv", index=False)
+    summary.to_csv(out / "robustness_summary.csv", index=False)
+    write_selected_params(out / "selected_params.yaml", selected)
     (out / "metadata.json").write_text(
         json.dumps(
             {
-                "stage": "v2.3_xai_smoke" if len(xai_audit) else "v2_smoke_s2",
-                "dataset_type": "pseudo_swarm",
+                "stage": "v2.5_calibration",
+                "dataset_type": "synthetic pseudo-swarm",
+                "swarm_dataset_type": "synthetic pseudo-swarm",
+                "source_dataset": "VisDrone2019-VID-val",
+                "stress_transforms_enabled": "stress" in str(swarm_config),
+                "limitation": "pseudo-swarm approximates multi-agent observations using transformed views of the same source frame",
                 "split": split,
                 "num_agents": int(frame_index["agent_id"].nunique()),
+                "num_sequences": int(frame_index["sequence_id"].nunique()),
                 "num_synchronized_frames": int(frame_index.groupby(["sequence_id", "frame_id"])["agent_id"].nunique().eq(frame_index["agent_id"].nunique()).sum()),
                 "xai_enabled": bool(len(xai_audit)),
                 "xai_method_requested": xai_method,
                 "xai_method_used": xai_method if len(xai_audit) else None,
                 "gradcam_status": "not_attempted_or_failed" if xai_method == "eigencam" else "fallback_not_used",
                 "xai_candidate_policy": {"c_low": 0.5, "sigma_k": 0.3, "sigma_s": 0.3, "tau_pre": 0.3, "M_xai": xai_max_per_frame},
-                "x_i_formula": "sum(CAM inside bbox) / sum(CAM over image)",
-                "xai_stage": "score_normalization_and_audit" if len(xai_audit) else None,
+                "x_i_formula": "top-5-percent CAM pixels inside bbox share",
+                "x_i_selected_method": "x_top5_inside",
+                "xai_score_warning": "selected after smoke; calibration evaluates whether it generalizes",
+                "xai_stage": "v2.5_calibration" if len(xai_audit) else None,
                 "xai_not_yet_final_filter": bool(len(xai_audit)),
                 "x_i_neutral_when_not_called": 1.0,
                 "s_missing_policy": "neutral",
+                "s3_safe_recovery_status": "not implemented for swarm_vid pseudo-swarm in v2.5",
+                "s4_hybrid_status": "not implemented for swarm_vid pseudo-swarm in v2.5",
             },
             indent=2,
         )
@@ -137,10 +173,13 @@ def run_swarm_tnorm_smoke(
     )
     print(f"output: {out}")
     print(f"mean_s_i: {features['s_i'].mean():.4f}")
-    print(f"s2_rejected: {int((audit[audit['scenario'] == 'S2_tnorm_no_xai']['accepted'] == False).sum())}")
+    s2_rows = summary[summary["scenario"] == "S2_tnorm_no_xai"]
+    print(f"s2_rejected_best: {int(s2_rows['num_rejected'].min()) if len(s2_rows) else 0}")
     if len(xai_summary):
         print(f"num_xai_called: {int(xai_summary.iloc[0]['num_xai_called'])}")
         print(f"mean_x_i: {float(xai_summary.iloc[0]['mean_x_i']):.4f}")
+    print(f"selection_status: {selected['selection_status']}")
+    print(f"holdout_allowed: {selected['holdout_allowed']}")
 
 
 def apply_xai_smoke(features: pd.DataFrame, frame_index: pd.DataFrame, method: str, max_per_frame: int, max_frames: int | None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -374,12 +413,43 @@ def _q(frame: pd.DataFrame, norm: str) -> pd.Series:
     raise ValueError(f"Unknown t-norm: {norm}")
 
 
-def _summary(frame: pd.DataFrame, scenario: str, norm: str | None, tau: float | None) -> dict:
+def _summary(frame: pd.DataFrame, scenario: str, norm: str | None, tau: float | None, num_frames: int) -> dict:
+    total_gt = int((frame["track_id"] != -1).sum())
+    accepted = frame["accepted"].astype(bool)
+    tp = int((accepted & (frame["track_id"] != -1)).sum())
+    fp = int((accepted & (frame["track_id"] == -1)).sum())
+    fn = max(0, total_gt - tp)
+    precision = tp / max(1, tp + fp)
+    recall = tp / max(1, tp + fn)
+    f1 = 2 * precision * recall / max(1e-12, precision + recall)
+    track_breaks = _track_breaks(frame)
+    idsw = 0
+    mota = 1.0 - (fp + fn + idsw) / max(1, total_gt)
+    failures = (fp + fn + idsw + track_breaks) / max(1, num_frames) * 100.0
     return {
         "scenario": scenario,
+        "model_name": "yolov8n",
+        "eps": float(frame["eps"].iloc[0]) if "eps" in frame and len(frame) else 0.0,
+        "class_group": "all",
         "t_norm": norm,
         "tau_Q": tau,
-        "x_i_selected_method": "density_norm_cap5" if scenario == "S3_tnorm_xai" else None,
+        "x_i_selected_method": "x_top5_inside" if scenario == "S3_tnorm_xai" else None,
+        "TP": tp,
+        "FP": fp,
+        "FN": fn,
+        "precision": precision,
+        "recall": recall,
+        "F1": f1,
+        "IDF1": f1,
+        "IDSW": idsw,
+        "track_breaks": track_breaks,
+        "MOTA": mota,
+        "ASR_track": failures / 100.0,
+        "failures_per_100_frames": failures,
+        "FP_per_100_frames": fp / max(1, num_frames) * 100.0,
+        "FN_per_100_frames": fn / max(1, num_frames) * 100.0,
+        "latency_ms": 0.0,
+        "xai_latency_ms": 0.0,
         "num_detections_before_filter": len(frame),
         "num_detections_after_filter": int(frame["accepted"].sum()),
         "num_rejected": int((~frame["accepted"]).sum()),
@@ -394,7 +464,129 @@ def _summary(frame: pd.DataFrame, scenario: str, norm: str | None, tau: float | 
         "mean_Q_i": float(frame["Q_i"].mean()),
         "xai_calls_total": int(frame["xai_called"].sum()) if "xai_called" in frame else 0,
         "xai_calls_per_frame": float(frame["xai_called"].sum() / max(1, frame[["sequence_id", "frame_id", "agent_id"]].drop_duplicates().shape[0])) if "xai_called" in frame else 0.0,
+        "implementation_status": "ok",
     }
+
+
+def _not_implemented_summary(scenario: str, num_frames: int) -> dict:
+    return {
+        "scenario": scenario,
+        "model_name": "yolov8n",
+        "eps": 0.008,
+        "class_group": "all",
+        "t_norm": None,
+        "tau_Q": None,
+        "x_i_selected_method": None,
+        "TP": None,
+        "FP": None,
+        "FN": None,
+        "precision": None,
+        "recall": None,
+        "F1": None,
+        "IDF1": None,
+        "IDSW": None,
+        "track_breaks": None,
+        "MOTA": None,
+        "ASR_track": None,
+        "failures_per_100_frames": None,
+        "FP_per_100_frames": None,
+        "FN_per_100_frames": None,
+        "latency_ms": None,
+        "xai_calls_per_frame": None,
+        "xai_latency_ms": None,
+        "num_detections_before_filter": 0,
+        "num_detections_after_filter": 0,
+        "num_rejected": 0,
+        "rejection_rate": None,
+        "mean_c_i": None,
+        "mean_k_i": None,
+        "mean_s_i": None,
+        "mean_x_i": None,
+        "share_k_i_low": None,
+        "share_s_i_low": None,
+        "share_x_i_low": None,
+        "mean_Q_i": None,
+        "xai_calls_total": 0,
+        "implementation_status": "not_implemented_for_swarm_vid_pseudo",
+    }
+
+
+def _track_breaks(frame: pd.DataFrame) -> int:
+    accepted = frame[(frame["accepted"] == True) & (frame["track_id"] != -1)]
+    if accepted.empty:
+        return 0
+    cols = ["sequence_id", "agent_id", "track_id", "frame_id"]
+    uniq = accepted[cols].drop_duplicates().sort_values(cols)
+    prev = uniq.groupby(["sequence_id", "agent_id", "track_id"], sort=False)["frame_id"].shift(1)
+    return int(((uniq["frame_id"] - prev) > 1).sum())
+
+
+def select_params(summary: pd.DataFrame, threshold: pd.DataFrame) -> dict:
+    candidates = summary[summary["scenario"].isin(["S2_tnorm_no_xai", "S3_tnorm_xai", "S4_hybrid"])].copy()
+    candidates = candidates[candidates["implementation_status"].fillna("ok") == "ok"]
+    naive = summary[summary["scenario"] == "S_naive"].copy()
+    if candidates.empty or naive.empty:
+        return {"selection_status": "not_selected", "holdout_allowed": False, "reason": "missing_candidates"}
+    naive_best = naive.sort_values(["IDF1", "F1"], ascending=False).iloc[0]
+    valid = candidates[
+        (candidates["IDF1"] >= naive_best["IDF1"])
+        & (candidates["IDSW"] <= naive_best["IDSW"])
+        & (candidates["track_breaks"] <= naive_best["track_breaks"])
+        & ((candidates["FP"] - naive_best["FP"]) / max(1, naive_best["FP"]) <= 0.15)
+    ].copy()
+    if valid.empty:
+        return {
+            "selection_status": "not_selected",
+            "holdout_allowed": False,
+            "reason": "no_candidate_beats_s_naive",
+            "baseline_s_naive_IDF1": float(naive_best["IDF1"]),
+        }
+    valid["score"] = (
+        0.30 * valid["IDF1"]
+        + 0.25 * valid["F1"]
+        - 0.15 * valid["IDSW"].fillna(0) / max(1, valid["num_detections_before_filter"].max())
+        - 0.15 * valid["track_breaks"].fillna(0) / max(1, valid["num_detections_before_filter"].max())
+        - 0.10 * valid["FP_per_100_frames"].fillna(0) / 100.0
+    )
+    best = valid.sort_values("score", ascending=False).iloc[0]
+    return {
+        "selection_status": "selected",
+        "holdout_allowed": True,
+        "selected_scenario": best["scenario"],
+        "selected_t_norm": best["t_norm"],
+        "selected_tau_Q": float(best["tau_Q"]),
+        "x_i_selected_method": "x_top5_inside",
+        "xai_method": "eigencam",
+        "score": float(best["score"]),
+    }
+
+
+def build_ablation(features: pd.DataFrame, num_frames: int) -> pd.DataFrame:
+    variants = {
+        "c_only": ["c_i"],
+        "c_k": ["c_i", "k_i"],
+        "c_s": ["c_i", "s_i"],
+        "c_k_s": ["c_i", "k_i", "s_i"],
+        "c_k_x": ["c_i", "k_i", "x_i"],
+        "c_s_x": ["c_i", "s_i", "x_i"],
+        "c_k_s_x": ["c_i", "k_i", "s_i", "x_i"],
+    }
+    rows = []
+    for name, cols in variants.items():
+        frame = features.copy()
+        frame["scenario"] = name
+        frame["Q_i"] = frame[cols].min(axis=1)
+        frame["accepted"] = frame["Q_i"] >= 0.30
+        row = _summary(frame, name, "min", 0.30, num_frames)
+        row["variant"] = name
+        row["features_used"] = ",".join(cols)
+        row["interpretation"] = "pseudo-swarm calibration ablation"
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def write_selected_params(path: Path, selected: dict) -> None:
+    path.write_text(yaml.safe_dump(selected, sort_keys=False, allow_unicode=True), encoding="utf-8")
 
 
 def _load_yaml(path: str | Path) -> dict:

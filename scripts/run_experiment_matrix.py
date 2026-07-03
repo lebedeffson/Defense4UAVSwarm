@@ -67,7 +67,7 @@ def main() -> None:
     p.add_argument("--semantic-features", nargs="+", default=["margin", "augmentation", "temporal"])
     p.add_argument("--xai-method", choices=["eigencam", "gradcam"], default="eigencam")
     p.add_argument("--augmentation-count", type=int, default=3)
-    p.add_argument("--semantic-max-frames", type=int, default=30)
+    p.add_argument("--semantic-max-frames", type=int, default=None)
     p.add_argument("--xai-max-per-frame", type=int, default=3)
     p.add_argument("--recovery-modes", nargs="+", default=None)
     p.add_argument("--recovery-horizons", nargs="+", type=int, default=None)

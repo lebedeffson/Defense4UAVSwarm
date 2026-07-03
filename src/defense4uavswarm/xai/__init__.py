@@ -62,7 +62,7 @@ def compute_xai_score(cam: np.ndarray | None, bbox: tuple[float, float, float, f
         top_scores[f"x_top{pct}_inside"] = inside_top / max(1, denom)
     return {
         "x_raw": x_raw,
-        "x_i": min(max(density / 5.0, 0.0), 1.0),
+        "x_i": top_scores["x_top5_inside"],
         "xai_energy_inside_bbox": inside,
         "xai_total_energy": total,
         "bbox_area": bbox_area,
@@ -76,8 +76,8 @@ def compute_xai_score(cam: np.ndarray | None, bbox: tuple[float, float, float, f
         "x_top5_inside": top_scores["x_top5_inside"],
         "x_top10_inside": top_scores["x_top10_inside"],
         "x_peak_inside": float(ix1 <= peak_x < ix2 and iy1 <= peak_y < iy2),
-        "x_i_selected": min(max(density / 5.0, 0.0), 1.0),
-        "x_i_selected_method": "density_norm_cap5",
+        "x_i_selected": top_scores["x_top5_inside"],
+        "x_i_selected_method": "x_top5_inside",
     }
 
 
