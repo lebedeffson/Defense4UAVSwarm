@@ -81,6 +81,22 @@ def load_selected_defense(path: str | Path | None) -> dict:
         return yaml.safe_load(f) or {}
 
 
+def selected_recovery_spec(selected_defense: dict, model_name: str, eps: float) -> dict | None:
+    selected = selected_defense.get("selected", {}) if selected_defense else {}
+    model_selected = selected.get(model_name, {})
+    if model_selected.get(f"eps_{eps}") or model_selected.get("model_level"):
+        return model_selected.get(f"eps_{eps}") or model_selected.get("model_level")
+    for value in model_selected.values():
+        if isinstance(value, dict):
+            return value
+    for other_model in selected.values():
+        if isinstance(other_model, dict):
+            for value in other_model.values():
+                if isinstance(value, dict):
+                    return value
+    return None
+
+
 def load_or_run_detection(path: Path, cfg: dict, ds: VisDroneDataset, scenario: str, eps: float, sequences: list[str], limit_sequences: int | None, enable_tracking: bool = True) -> pd.DataFrame:
     existing = load_existing(path)
     if existing is not None:
@@ -252,6 +268,23 @@ def run_experiment_matrix(
 
                 if "s3_safe_recovery" in scenarios and task in {"vid", "mot"}:
                     rec_cfg = mc.get("recovery", {})
+                    recovery_selected = selected_recovery_spec(selected_defense, model_name, eps) if split != "calibration" else None
+                    if recovery_selected:
+                        rec_cfg = {
+                            **rec_cfg,
+                            "modes": [recovery_selected["recovery_mode"]],
+                            "horizons": [int(recovery_selected["recovery_horizon"])],
+                            "decays": [float(recovery_selected["decay"])],
+                            "confirm_ages": [int(recovery_selected.get("A_confirm", recovery_selected.get("min_track_age", 5)))],
+                            "max_recovered_tracks_per_frame": [int(recovery_selected["max_recovered_tracks_per_frame"])],
+                            "min_recent_confidences": [float(recovery_selected["min_recent_confidence"])],
+                            "min_mean_track_confidences": [float(recovery_selected["min_mean_track_confidence"])],
+                            "recovered_conf_floors": [float(recovery_selected.get("recovered_conf_floor", 0.05))],
+                            "weak_detection_support": [bool(recovery_selected["weak_detection_support"])],
+                            "weak_confidence_mins": [float(recovery_selected["weak_confidence_min"])],
+                            "weak_iou_mins": [float(recovery_selected["weak_iou_min"])],
+                            "recovery_cooldowns": [int(recovery_selected["recovery_cooldown"])],
+                        }
                     s3_safe, chosen, _ = run_track_recovery_calibration(
                         gt,
                         s0,
@@ -358,15 +391,22 @@ def run_experiment_matrix(
     if ("s3_track_recovery" in scenarios or "s3_safe_recovery" in scenarios) and (results / "selected_defense_params.yaml").exists():
         with open(results / "selected_defense_params.yaml", "r", encoding="utf-8") as f:
             selection = yaml.safe_load(f) or {}
+        if split == "holdout" and selected_defense:
+            holdout_evaluation = deepcopy(selection)
+            selection = deepcopy(selected_defense)
+            selection["selection_status"] = "fixed_from_calibration"
+            selection["holdout_run"] = True
+            selection["holdout_evaluation"] = holdout_evaluation.get("selected", {})
+            (results / "selected_defense_params.yaml").write_text(yaml.safe_dump(selection, sort_keys=False), encoding="utf-8")
         with open(results / "metadata.json", "r", encoding="utf-8") as f:
             metadata = json.load(f)
         metadata.update(
             {
-                "stage": "v1.7" if "s3_safe_recovery" in scenarios else "v1.6",
+                "stage": "v1.8" if split == "holdout" and "s3_safe_recovery" in scenarios else ("v1.7" if "s3_safe_recovery" in scenarios else "v1.6"),
                 "scenario": "S3_safe_recovery" if "s3_safe_recovery" in scenarios else "S3_track_recovery",
                 "selection_status": selection.get("selection_status"),
                 "holdout_allowed": bool(selection.get("holdout_allowed", False)),
-                "holdout_run": False,
+                "holdout_run": split == "holdout",
             }
         )
         (results / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")

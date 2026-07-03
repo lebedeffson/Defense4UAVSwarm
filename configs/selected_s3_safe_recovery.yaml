@@ -1,0 +1,21 @@
+selection_scope: model_eps_level
+selection_status: selected
+holdout_allowed: true
+reason: null
+selected:
+  yolov8n:
+    eps_0.008:
+      scenario: S3_safe_recovery
+      recovery_mode: hold_last
+      recovery_horizon: 2
+      decay: 0.60
+      recovered_conf_floor: 0.05
+      min_track_age: 5
+      A_confirm: 5
+      min_recent_confidence: 0.15
+      min_mean_track_confidence: 0.15
+      weak_detection_support: true
+      weak_confidence_min: 0.01
+      weak_iou_min: 0.30
+      recovery_cooldown: 2
+      max_recovered_tracks_per_frame: 3
