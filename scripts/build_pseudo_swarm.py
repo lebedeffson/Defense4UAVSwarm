@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -58,6 +59,8 @@ def main() -> None:
             matrix = affine_matrix(agent["transform"], width, height)
             warped = cv2.warpAffine(image, matrix[:2], (width, height), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT101)
             warped = apply_brightness(warped, float(agent["transform"].get("brightness_delta", 0.0)))
+            warped = apply_noise(warped, float(agent["transform"].get("noise_std", 0.0)), rec.frame_id, agent_id)
+            warped = apply_occlusion(warped, float(agent["transform"].get("occlusion_prob", 0.0)), rec.frame_id, agent_id)
             rel_path = Path(agent_id) / rec.sequence_id / f"{rec.frame_id:07d}.jpg"
             out_path = output / rel_path
             out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -123,6 +126,34 @@ def apply_brightness(image: np.ndarray, delta: float) -> np.ndarray:
         return image
     out = image.astype(np.float32) + delta * 255.0
     return np.clip(out, 0, 255).astype(np.uint8)
+
+
+def apply_noise(image: np.ndarray, std: float, frame_id: int, agent_id: str) -> np.ndarray:
+    if std <= 0:
+        return image
+    rng = np.random.default_rng(stable_seed(frame_id, agent_id, "noise"))
+    noise = rng.normal(0.0, std * 255.0, image.shape)
+    return np.clip(image.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+
+
+def apply_occlusion(image: np.ndarray, prob: float, frame_id: int, agent_id: str) -> np.ndarray:
+    if prob <= 0:
+        return image
+    rng = np.random.default_rng(stable_seed(frame_id, agent_id, "occ"))
+    if rng.random() > prob:
+        return image
+    out = image.copy()
+    h, w = out.shape[:2]
+    ow, oh = max(20, w // 8), max(20, h // 8)
+    x = int(rng.integers(0, max(1, w - ow)))
+    y = int(rng.integers(0, max(1, h - oh)))
+    out[y : y + oh, x : x + ow] = 0
+    return out
+
+
+def stable_seed(*parts: object) -> int:
+    text = "|".join(str(p) for p in parts).encode("utf-8")
+    return int.from_bytes(hashlib.sha256(text).digest()[:4], "little", signed=False)
 
 
 if __name__ == "__main__":

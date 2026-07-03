@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import yaml
 
 from defense4uavswarm.datasets.visdrone import VISDRONE_CLASSES, VisDroneDataset
 from defense4uavswarm.matrix import load_split_sequences
-from defense4uavswarm.swarm import compute_inter_agent_consistency, load_frame_index, transform_bbox
+from defense4uavswarm.swarm import compute_inter_agent_consistency, jitter_bbox, load_frame_index, transform_bbox
 from defense4uavswarm.xai import compute_cam, compute_xai_score, select_xai_candidates
 
 
@@ -44,7 +45,8 @@ def run_swarm_tnorm_smoke(
     features["scenario"] = "S1_fgsm"
     features["model_name"] = "pseudo_yolo"
     features["eps"] = eps_values[0] if eps_values else 0.0
-    features["k_i"] = 1.0
+    features = add_kinematics(features)
+    features["k_i"] = features["k_i_selected"]
     features["x_i"] = 1.0
     features["x_i_available"] = False
     features["xai_called"] = False
@@ -104,10 +106,11 @@ def run_swarm_tnorm_smoke(
     if len(xai_audit):
         xai_audit.to_csv(out / "xai_feature_audit.csv", index=False)
         xai_summary.to_csv(out / "xai_summary.csv", index=False)
+        xai_score_auc(xai_audit).to_csv(out / "xai_score_auc.csv", index=False)
     pd.DataFrame(rows).to_csv(out / "summary_metrics.csv", index=False)
     pd.DataFrame(rows).to_csv(out / "research_matrix.csv", index=False)
     pd.DataFrame(threshold_rows).to_csv(out / "threshold_selection.csv", index=False)
-    pd.DataFrame([r for r in rows if r["scenario"] == "S2_tnorm_no_xai"]).to_csv(out / "tnorm_comparison.csv", index=False)
+    pd.DataFrame([r for r in rows if r["scenario"] in {"S2_tnorm_no_xai", "S3_tnorm_xai"}]).to_csv(out / "tnorm_comparison.csv", index=False)
     (out / "metadata.json").write_text(
         json.dumps(
             {
@@ -122,6 +125,8 @@ def run_swarm_tnorm_smoke(
                 "gradcam_status": "not_attempted_or_failed" if xai_method == "eigencam" else "fallback_not_used",
                 "xai_candidate_policy": {"c_low": 0.5, "sigma_k": 0.3, "sigma_s": 0.3, "tau_pre": 0.3, "M_xai": xai_max_per_frame},
                 "x_i_formula": "sum(CAM inside bbox) / sum(CAM over image)",
+                "xai_stage": "score_normalization_and_audit" if len(xai_audit) else None,
+                "xai_not_yet_final_filter": bool(len(xai_audit)),
                 "x_i_neutral_when_not_called": 1.0,
                 "s_missing_policy": "neutral",
             },
@@ -145,7 +150,9 @@ def apply_xai_smoke(features: pd.DataFrame, frame_index: pd.DataFrame, method: s
     image_paths = frame_index.set_index(["sequence_id", "frame_id", "agent_id"])["image_path"].to_dict()
     audit_rows = []
     frame_count = 0
-    for key, group in out.groupby(["sequence_id", "frame_id", "agent_id"], sort=False):
+    cam_cache: dict[str, tuple[np.ndarray | None, float]] = {}
+    ordered = out.sort_values(["sequence_id", "frame_id", "agent_id", "risk"], ascending=[True, True, True, False])
+    for frame_key, group in ordered.groupby(["sequence_id", "frame_id"], sort=False):
         if max_frames is not None and frame_count >= max_frames:
             break
         candidates = select_xai_candidates(group, max_per_frame=max_per_frame)
@@ -153,17 +160,20 @@ def apply_xai_smoke(features: pd.DataFrame, frame_index: pd.DataFrame, method: s
             candidates = group.sort_values("risk", ascending=False).head(1)
         if candidates.empty:
             continue
-        cam, latency = compute_cam(image_paths[key], method=method)
         for rank, (idx, row) in enumerate(candidates.iterrows(), start=1):
-            x_i, inside, total = compute_xai_score(cam, (row.x1, row.y1, row.x2, row.y2))
-            available = x_i is not None
-            value = float(x_i) if available else 1.0
+            image_key = (row.sequence_id, row.frame_id, row.agent_id)
+            image_path = image_paths[image_key]
+            if image_path not in cam_cache:
+                cam_cache[image_path] = compute_cam(image_path, method=method)
+            cam, latency = cam_cache[image_path]
+            scores = compute_xai_score(cam, (row.x1, row.y1, row.x2, row.y2))
+            available = scores["x_i_selected"] is not None
+            value = float(scores["x_i_selected"]) if available else 1.0
             out.loc[idx, "x_i"] = value
             out.loc[idx, "x_i_available"] = available
             out.loc[idx, "xai_called"] = True
             out.loc[idx, "xai_method"] = method
-            audit_rows.append(
-                {
+            audit_row = {
                     "sequence_id": row.sequence_id,
                     "frame_id": row.frame_id,
                     "agent_id": row.agent_id,
@@ -186,16 +196,14 @@ def apply_xai_smoke(features: pd.DataFrame, frame_index: pd.DataFrame, method: s
                     "bbox_y1": row.y1,
                     "bbox_x2": row.x2,
                     "bbox_y2": row.y2,
-                    "x_i": value,
-                    "xai_energy_inside_bbox": inside,
-                    "xai_total_energy": total,
                     "xai_latency_ms": latency,
                     "is_TP": row.track_id != -1,
                     "is_FP": row.track_id == -1,
                     "matched_gt_id": row.track_id if row.track_id != -1 else None,
                     "matched_gt_iou": 1.0 if row.track_id != -1 else 0.0,
                 }
-            )
+            audit_row.update(scores)
+            audit_rows.append(audit_row)
         frame_count += 1
     audit = pd.DataFrame(audit_rows)
     called = out[out["xai_called"] == True]
@@ -213,6 +221,10 @@ def apply_xai_smoke(features: pd.DataFrame, frame_index: pd.DataFrame, method: s
                 "median_x_i": float(available["x_i"].median()) if len(available) else 0.0,
                 "x_i_min": float(available["x_i"].min()) if len(available) else 0.0,
                 "x_i_max": float(available["x_i"].max()) if len(available) else 0.0,
+                "x_raw_mean": float(audit["x_raw"].dropna().mean()) if len(audit) else 0.0,
+                "x_density_norm_cap5_mean": float(audit["x_i_density_norm_cap5"].dropna().mean()) if len(audit) else 0.0,
+                "x_top5_inside_mean": float(audit["x_top5_inside"].dropna().mean()) if len(audit) else 0.0,
+                "x_peak_inside_rate": float(audit["x_peak_inside"].dropna().mean()) if len(audit) else 0.0,
                 "share_x_i_lt_0_3": float((available["x_i"] < 0.3).mean()) if len(available) else 0.0,
                 "share_x_i_lt_0_5": float((available["x_i"] < 0.5).mean()) if len(available) else 0.0,
                 "mean_xai_latency_ms": float(audit["xai_latency_ms"].mean()) if len(audit) else 0.0,
@@ -223,15 +235,127 @@ def apply_xai_smoke(features: pd.DataFrame, frame_index: pd.DataFrame, method: s
     return out, audit, summary
 
 
+def xai_score_auc(audit: pd.DataFrame) -> pd.DataFrame:
+    scores = {
+        "1-x_raw": "x_raw",
+        "1-x_i_density_norm_cap2": "x_i_density_norm_cap2",
+        "1-x_i_density_norm_cap5": "x_i_density_norm_cap5",
+        "1-x_i_density_norm_cap10": "x_i_density_norm_cap10",
+        "1-x_top1_inside": "x_top1_inside",
+        "1-x_top5_inside": "x_top5_inside",
+        "1-x_top10_inside": "x_top10_inside",
+        "1-x_peak_inside": "x_peak_inside",
+    }
+    rows = []
+    for name, col in scores.items():
+        data = audit[[col, "is_FP"]].dropna()
+        y = data["is_FP"].astype(int)
+        risk = 1.0 - data[col].astype(float)
+        rows.append(
+            {
+                "score_name": name,
+                "num_samples": len(data),
+                "num_TP": int((y == 0).sum()),
+                "num_FP": int((y == 1).sum()),
+                "roc_auc": _roc_auc(y, risk),
+                "average_precision": _average_precision(y, risk),
+                "precision_at_1pct_rejection": _precision_at(y, risk, 0.01),
+                "precision_at_5pct_rejection": _precision_at(y, risk, 0.05),
+                "precision_at_10pct_rejection": _precision_at(y, risk, 0.10),
+                "best_threshold": float(risk.median()) if len(risk) else 0.0,
+                "best_FP_detection_F1": _best_f1(y, risk),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _roc_auc(y: pd.Series, score: pd.Series) -> float:
+    pos = score[y == 1].to_numpy()
+    neg = score[y == 0].to_numpy()
+    if len(pos) == 0 or len(neg) == 0:
+        return 0.5
+    return float(((pos[:, None] > neg[None, :]).mean() + 0.5 * (pos[:, None] == neg[None, :]).mean()))
+
+
+def _average_precision(y: pd.Series, score: pd.Series) -> float:
+    if int(y.sum()) == 0:
+        return 0.0
+    order = score.sort_values(ascending=False).index
+    yy = y.loc[order].to_numpy()
+    precision = np.cumsum(yy) / np.arange(1, len(yy) + 1)
+    return float((precision * yy).sum() / max(1, yy.sum()))
+
+
+def _precision_at(y: pd.Series, score: pd.Series, frac: float) -> float:
+    n = max(1, int(round(len(score) * frac)))
+    idx = score.sort_values(ascending=False).head(n).index
+    return float(y.loc[idx].mean()) if len(idx) else 0.0
+
+
+def _best_f1(y: pd.Series, score: pd.Series) -> float:
+    best = 0.0
+    for threshold in score.quantile([0.1, 0.2, 0.3, 0.5, 0.7, 0.9]).unique():
+        pred = score >= threshold
+        tp = int(((pred == 1) & (y == 1)).sum())
+        fp = int(((pred == 1) & (y == 0)).sum())
+        fn = int(((pred == 0) & (y == 1)).sum())
+        best = max(best, 2 * tp / max(1, 2 * tp + fp + fn))
+    return float(best)
+
+
+def add_kinematics(frame: pd.DataFrame) -> pd.DataFrame:
+    out = frame.sort_values(["agent_id", "track_id", "sequence_id", "frame_id"]).copy()
+    out[["k_center", "k_iou", "k_combined"]] = 1.0
+    for _, group in out.groupby(["agent_id", "track_id"], sort=False):
+        prev_box = None
+        prev_center = None
+        prev_velocity = (0.0, 0.0)
+        for idx, row in group.iterrows():
+            box = (row.x1, row.y1, row.x2, row.y2)
+            center = ((row.x1 + row.x2) / 2.0, (row.y1 + row.y2) / 2.0)
+            if prev_box is None:
+                k_center, k_iou = 1.0, 1.0
+            else:
+                pred_center = (prev_center[0] + prev_velocity[0], prev_center[1] + prev_velocity[1])
+                pred_box = _shift_box(prev_box, prev_velocity)
+                dist = ((center[0] - pred_center[0]) ** 2 + (center[1] - pred_center[1]) ** 2) ** 0.5
+                diag = max(1.0, ((prev_box[2] - prev_box[0]) ** 2 + (prev_box[3] - prev_box[1]) ** 2) ** 0.5)
+                k_center = float(np.exp(-dist / diag))
+                k_iou = _iou(box, pred_box)
+            k_combined = float((k_center * max(k_iou, 1e-6)) ** 0.5)
+            out.loc[idx, ["k_center", "k_iou", "k_combined"]] = [k_center, k_iou, k_combined]
+            prev_velocity = (center[0] - prev_center[0], center[1] - prev_center[1]) if prev_center else (0.0, 0.0)
+            prev_center, prev_box = center, box
+    out["k_i_selected"] = out["k_combined"]
+    out["k_i_selected_method"] = "k_combined"
+    return out
+
+
+def _shift_box(box: tuple[float, float, float, float], velocity: tuple[float, float]) -> tuple[float, float, float, float]:
+    return (box[0] + velocity[0], box[1] + velocity[1], box[2] + velocity[0], box[3] + velocity[1])
+
+
+def _iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
+    x1, y1 = max(a[0], b[0]), max(a[1], b[1])
+    x2, y2 = min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    area_a = max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
+    area_b = max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+    return inter / max(1e-9, area_a + area_b - inter)
+
+
 def _pseudo_detections(gt: pd.DataFrame, frame_index: pd.DataFrame) -> pd.DataFrame:
     transforms = frame_index.set_index(["sequence_id", "frame_id", "agent_id"])["transform_from_reference_matrix"].to_dict()
+    jitters = frame_index.set_index(["sequence_id", "frame_id", "agent_id"])["bbox_jitter"].to_dict()
     rows = []
     det_id = 0
     for frame_row in frame_index[["sequence_id", "frame_id", "agent_id"]].drop_duplicates().itertuples(index=False):
         frame_gt = gt[(gt.sequence_id == frame_row.sequence_id) & (gt.frame_id == frame_row.frame_id)]
         matrix = transforms[(frame_row.sequence_id, frame_row.frame_id, frame_row.agent_id)]
+        jitter = float(jitters.get((frame_row.sequence_id, frame_row.frame_id, frame_row.agent_id), 0.0))
         for g in frame_gt.itertuples(index=False):
             box = transform_bbox((g.x1, g.y1, g.x2, g.y2), matrix)
+            box = jitter_bbox(box, jitter, frame_row.sequence_id, frame_row.frame_id, frame_row.agent_id, g.gt_track_id)
             rows.append({"det_id": det_id, "sequence_id": frame_row.sequence_id, "frame_id": frame_row.frame_id, "agent_id": frame_row.agent_id, "track_id": g.gt_track_id, "class_id": g.class_id, "class_name": VISDRONE_CLASSES.get(int(g.class_id), "unknown"), "confidence": 0.9, "x1": box[0], "y1": box[1], "x2": box[2], "y2": box[3]})
             det_id += 1
         if frame_row.agent_id == "agent_2" and int(frame_row.frame_id) % 10 == 0:
@@ -251,7 +375,26 @@ def _q(frame: pd.DataFrame, norm: str) -> pd.Series:
 
 
 def _summary(frame: pd.DataFrame, scenario: str, norm: str | None, tau: float | None) -> dict:
-    return {"scenario": scenario, "t_norm": norm, "tau_Q": tau, "num_detections_before_filter": len(frame), "num_detections_after_filter": int(frame["accepted"].sum()), "num_rejected": int((~frame["accepted"]).sum()), "rejection_rate": float((~frame["accepted"]).mean()), "mean_s_i": float(frame["s_i"].mean()), "share_s_i_low": float((frame["s_i"] < 0.3).mean()), "mean_Q_i": float(frame["Q_i"].mean())}
+    return {
+        "scenario": scenario,
+        "t_norm": norm,
+        "tau_Q": tau,
+        "x_i_selected_method": "density_norm_cap5" if scenario == "S3_tnorm_xai" else None,
+        "num_detections_before_filter": len(frame),
+        "num_detections_after_filter": int(frame["accepted"].sum()),
+        "num_rejected": int((~frame["accepted"]).sum()),
+        "rejection_rate": float((~frame["accepted"]).mean()),
+        "mean_c_i": float(frame["c_i"].mean()),
+        "mean_k_i": float(frame["k_i"].mean()),
+        "mean_s_i": float(frame["s_i"].mean()),
+        "mean_x_i": float(frame["x_i"].mean()),
+        "share_k_i_low": float((frame["k_i"] < 0.7).mean()),
+        "share_s_i_low": float((frame["s_i"] < 0.3).mean()),
+        "share_x_i_low": float((frame["x_i"] < 0.3).mean()),
+        "mean_Q_i": float(frame["Q_i"].mean()),
+        "xai_calls_total": int(frame["xai_called"].sum()) if "xai_called" in frame else 0,
+        "xai_calls_per_frame": float(frame["xai_called"].sum() / max(1, frame[["sequence_id", "frame_id", "agent_id"]].drop_duplicates().shape[0])) if "xai_called" in frame else 0.0,
+    }
 
 
 def _load_yaml(path: str | Path) -> dict:

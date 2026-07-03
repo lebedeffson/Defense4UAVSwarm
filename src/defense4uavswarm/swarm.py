@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -10,9 +11,17 @@ from defense4uavswarm.tracking.simple import iou
 
 
 def load_frame_index(root: str | Path) -> pd.DataFrame:
-    frame = pd.read_csv(Path(root) / "metadata" / "frame_index.csv")
+    root = Path(root)
+    frame = pd.read_csv(root / "metadata" / "frame_index.csv")
     frame["transform_to_reference_matrix"] = frame["transform_to_reference"].map(lambda x: np.array(json.loads(x), dtype=float))
     frame["transform_from_reference_matrix"] = frame["transform_from_reference"].map(lambda x: np.array(json.loads(x), dtype=float))
+    transforms_path = root / "metadata" / "transforms.json"
+    if transforms_path.exists():
+        payload = json.loads(transforms_path.read_text(encoding="utf-8"))
+        jitter = {agent: spec.get("transform", {}).get("bbox_jitter", 0.0) for agent, spec in payload.get("agents", {}).items()}
+        frame["bbox_jitter"] = frame["agent_id"].map(jitter).fillna(0.0).astype(float)
+    else:
+        frame["bbox_jitter"] = 0.0
     return frame
 
 
@@ -22,6 +31,18 @@ def transform_bbox(box: tuple[float, float, float, float], matrix: np.ndarray) -
     out = matrix @ pts
     out = out[:2] / np.maximum(out[2:], 1e-9)
     return (float(out[0].min()), float(out[1].min()), float(out[0].max()), float(out[1].max()))
+
+
+def jitter_bbox(box: tuple[float, float, float, float], jitter: float, *seed_parts: object) -> tuple[float, float, float, float]:
+    if jitter <= 0:
+        return box
+    seed_text = "|".join(str(p) for p in seed_parts).encode("utf-8")
+    seed = int.from_bytes(hashlib.sha256(seed_text).digest()[:8], "little", signed=False)
+    rng = np.random.default_rng(seed)
+    dx, dy = rng.normal(0.0, jitter, size=2)
+    dw, dh = rng.normal(0.0, jitter * 0.25, size=2)
+    x1, y1, x2, y2 = box
+    return (float(x1 + dx - dw), float(y1 + dy - dh), float(x2 + dx + dw), float(y2 + dy + dh))
 
 
 def compute_inter_agent_consistency(

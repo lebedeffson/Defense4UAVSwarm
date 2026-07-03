@@ -7,17 +7,20 @@ from pathlib import Path
 import pandas as pd
 
 from defense4uavswarm.datasets.visdrone import VISDRONE_CLASSES, VisDroneDataset
-from defense4uavswarm.swarm import compute_inter_agent_consistency, load_frame_index, transform_bbox
+from defense4uavswarm.swarm import compute_inter_agent_consistency, jitter_bbox, load_frame_index, transform_bbox
 
 
 def main() -> None:
     p = argparse.ArgumentParser()
+    p.add_argument("--root", default=None)
     p.add_argument("--swarm-root", default="data/swarm/pseudo_visdrone/smoke")
     p.add_argument("--source-root", default="data/visdrone")
     p.add_argument("--output-dir", default="outputs/results/swarm_v2_smoke_s_i")
     p.add_argument("--max-frames", type=int, default=80)
     p.add_argument("--iou-min", type=float, default=0.3)
     args = p.parse_args()
+    if args.root:
+        args.swarm_root = args.root
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
     frame_index = load_frame_index(args.swarm_root)
@@ -30,6 +33,7 @@ def main() -> None:
     features, matches = compute_inter_agent_consistency(detections, frame_index, iou_min=args.iou_min)
     features.to_csv(out / "swarm_feature_audit.csv", index=False)
     matches.to_csv(out / "inter_agent_matching_audit.csv", index=False)
+    distribution(features, Path(args.swarm_root).name).to_csv(out / "s_i_distribution.csv", index=False)
     report = {
         "num_detections": len(features),
         "num_matches": len(matches),
@@ -43,15 +47,45 @@ def main() -> None:
     print(text, end="")
 
 
+def distribution(features: pd.DataFrame, name: str) -> pd.DataFrame:
+    s = features["s_i"]
+    return pd.DataFrame(
+        [
+            {
+                "config_name": name,
+                "num_detections": len(features),
+                "mean_s_i": float(s.mean()),
+                "median_s_i": float(s.median()),
+                "s_i_min": float(s.min()),
+                "s_i_p01": float(s.quantile(0.01)),
+                "s_i_p05": float(s.quantile(0.05)),
+                "s_i_p10": float(s.quantile(0.10)),
+                "s_i_p25": float(s.quantile(0.25)),
+                "s_i_p75": float(s.quantile(0.75)),
+                "s_i_p90": float(s.quantile(0.90)),
+                "s_i_p95": float(s.quantile(0.95)),
+                "s_i_max": float(s.max()),
+                "share_s_i_lt_0_9": float((s < 0.9).mean()),
+                "share_s_i_lt_0_7": float((s < 0.7).mean()),
+                "share_s_i_lt_0_5": float((s < 0.5).mean()),
+                "share_s_i_lt_0_3": float((s < 0.3).mean()),
+            }
+        ]
+    )
+
+
 def build_pseudo_detections(gt: pd.DataFrame, frame_index: pd.DataFrame) -> pd.DataFrame:
     transforms = frame_index.set_index(["sequence_id", "frame_id", "agent_id"])["transform_from_reference_matrix"].to_dict()
+    jitters = frame_index.set_index(["sequence_id", "frame_id", "agent_id"])["bbox_jitter"].to_dict()
     rows = []
     det_id = 0
     for frame_row in frame_index[["sequence_id", "frame_id", "agent_id"]].drop_duplicates().itertuples(index=False):
         frame_gt = gt[(gt.sequence_id == frame_row.sequence_id) & (gt.frame_id == frame_row.frame_id)]
         matrix = transforms[(frame_row.sequence_id, frame_row.frame_id, frame_row.agent_id)]
+        jitter = float(jitters.get((frame_row.sequence_id, frame_row.frame_id, frame_row.agent_id), 0.0))
         for g in frame_gt.itertuples(index=False):
             box = transform_bbox((g.x1, g.y1, g.x2, g.y2), matrix)
+            box = jitter_bbox(box, jitter, frame_row.sequence_id, frame_row.frame_id, frame_row.agent_id, g.gt_track_id)
             rows.append(
                 {
                     "det_id": det_id,
