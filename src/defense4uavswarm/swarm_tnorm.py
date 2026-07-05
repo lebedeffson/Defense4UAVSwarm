@@ -155,6 +155,7 @@ def run_swarm_tnorm_smoke(
     feature_frames = []
     total_frames = int(frame_index[["sequence_id", "frame_id"]].drop_duplicates().shape[0])
     expected_gt = int((clean_features["track_id"] != -1).sum())
+    expected_gt_by_sequence = clean_features[clean_features["track_id"] != -1].groupby("sequence_id").size().to_dict()
     for scenario in scenarios:
         if scenario.lower() in {"s0", "s0_clean", "s1", "s1_fgsm"}:
             frame = clean_features.copy() if scenario.lower().startswith("s0") else features.copy()
@@ -397,7 +398,7 @@ def run_swarm_tnorm_smoke(
     candidate_score_distribution(feature_frames).to_csv(out / "candidate_score_distribution.csv", index=False)
     xai_newtrack_veto_summary(summary, feature_frames).to_csv(out / "xai_newtrack_veto_summary.csv", index=False)
     if save_per_sequence_metrics:
-        sequence_metrics(feature_frames, expected_gt).to_csv(out / "sequence_metrics.csv", index=False)
+        sequence_metrics(feature_frames, expected_gt_by_sequence).to_csv(out / "sequence_metrics.csv", index=False)
     if save_per_frame_metrics:
         per_frame_metrics(feature_frames).to_csv(out / "per_frame_metrics.csv", index=False)
     if save_track_events:
@@ -416,7 +417,9 @@ def run_swarm_tnorm_smoke(
         )
         noise_summary.to_csv(out / "calibration_noise_summary.csv", index=False)
         noise_manifest_all.append(noise_manifest_extra)
-    pd.concat(noise_manifest_all, ignore_index=True).to_csv(out / "calibration_noise_manifest.csv", index=False)
+    pd.concat(noise_manifest_all, ignore_index=True).drop_duplicates(
+        ["calibration_noise_px", "calibration_noise_seed", "sequence_id", "agent_id", "mode"]
+    ).to_csv(out / "calibration_noise_manifest.csv", index=False)
     if feature_sets:
         build_feature_ablation_summary(summary).to_csv(out / "feature_ablation_summary.csv", index=False)
     if aggregators:
@@ -1563,14 +1566,14 @@ def apply_calibration_noise(
     return out, pd.DataFrame(rows)
 
 
-def sequence_metrics(feature_frames: list[pd.DataFrame], expected_gt: int | None = None) -> pd.DataFrame:
+def sequence_metrics(feature_frames: list[pd.DataFrame], expected_gt_by_sequence: dict | None = None) -> pd.DataFrame:
     rows = []
     for frame in feature_frames:
         if frame.empty or "scenario" not in frame:
             continue
         scenario = str(frame["scenario"].iloc[0])
         for seq, group in frame.groupby("sequence_id", sort=False):
-            seq_gt = int((group["eval_is_tp"].astype(bool)).sum()) if expected_gt is not None else None
+            seq_gt = int(expected_gt_by_sequence.get(seq, 0)) if expected_gt_by_sequence else None
             row = _summary(group, scenario, first_value(group, "t_norm"), None, int(group["frame_id"].nunique()), seq_gt)
             row["sequence_id"] = seq
             row["num_frames"] = int(group["frame_id"].nunique())
