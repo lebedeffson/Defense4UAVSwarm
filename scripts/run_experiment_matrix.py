@@ -14,7 +14,9 @@ def main() -> None:
     p.add_argument("--config", default="configs/default.yaml")
     p.add_argument("--swarm-config", default=None)
     p.add_argument("--swarm-root", default=None)
+    p.add_argument("--swarm-generation-mode", default=None)
     p.add_argument("--pseudo-attack-config", default=None)
+    p.add_argument("--pseudo-attack-seed", type=int, default=None)
     p.add_argument("--models", nargs="+", default=["yolov8n", "yolov8s"])
     p.add_argument("--tasks", nargs="+", default=["vid"])
     p.add_argument("--eps", nargs="+", type=float, default=[0.004, 0.008])
@@ -79,6 +81,18 @@ def main() -> None:
     p.add_argument("--xai-mins", nargs="+", type=float, default=None)
     p.add_argument("--xai-floors", nargs="+", type=float, default=None)
     p.add_argument("--xai-veto-modes", nargs="+", default=None)
+    p.add_argument("--feature-sets", nargs="+", default=None)
+    p.add_argument("--aggregators", nargs="+", default=None)
+    p.add_argument("--calibration-noise-px", nargs="+", type=float, default=None)
+    p.add_argument("--calibration-noise-seed", type=int, default=123)
+    p.add_argument("--calibration-noise-mode", default="sequence_static")
+    p.add_argument("--enable-runtime-profiler", action="store_true")
+    p.add_argument("--runtime-warmup-frames", type=int, default=50)
+    p.add_argument("--runtime-sample-frames", type=int, default=300)
+    p.add_argument("--save-per-sequence-metrics", action="store_true")
+    p.add_argument("--save-per-frame-metrics", action="store_true")
+    p.add_argument("--save-track-events", action="store_true")
+    p.add_argument("--log-file", default=None)
     p.add_argument("--augmentation-count", type=int, default=3)
     p.add_argument("--semantic-max-frames", type=int, default=None)
     p.add_argument("--xai-max-per-frame", type=int, default=3)
@@ -188,6 +202,7 @@ def main() -> None:
             xai_max_per_frame=args.xai_max_per_frame,
             semantic_max_frames=args.semantic_max_frames,
             pseudo_attack_config=args.pseudo_attack_config,
+            pseudo_attack_seed=args.pseudo_attack_seed,
             swarm_root=args.swarm_root,
             use_selected_params=args.use_selected_params,
             sequence_batch_size=args.sequence_batch_size,
@@ -200,6 +215,18 @@ def main() -> None:
             xai_mins=args.xai_mins,
             xai_floors=args.xai_floors,
             xai_veto_modes=args.xai_veto_modes,
+            feature_sets=args.feature_sets,
+            aggregators=args.aggregators,
+            calibration_noise_px=args.calibration_noise_px,
+            calibration_noise_seed=args.calibration_noise_seed,
+            calibration_noise_mode=args.calibration_noise_mode,
+            enable_runtime_profiler=args.enable_runtime_profiler,
+            runtime_warmup_frames=args.runtime_warmup_frames,
+            runtime_sample_frames=args.runtime_sample_frames,
+            save_per_sequence_metrics=args.save_per_sequence_metrics,
+            save_per_frame_metrics=args.save_per_frame_metrics,
+            save_track_events=args.save_track_events,
+            log_file=args.log_file,
             reweight_modes=args.reweight_modes,
             q_floors=args.q_floors,
             q_floors_new=args.q_floors_new,

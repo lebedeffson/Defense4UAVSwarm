@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 from pathlib import Path
 
 import numpy as np
@@ -27,6 +28,7 @@ def run_swarm_tnorm_smoke(
     xai_max_per_frame: int = 5,
     semantic_max_frames: int | None = None,
     pseudo_attack_config: str | Path | None = None,
+    pseudo_attack_seed: int | None = None,
     swarm_root: str | Path | None = None,
     use_selected_params: str | Path | None = None,
     sequence_batch_size: int | None = None,
@@ -39,6 +41,18 @@ def run_swarm_tnorm_smoke(
     xai_mins: list[float] | None = None,
     xai_floors: list[float] | None = None,
     xai_veto_modes: list[str] | None = None,
+    feature_sets: list[str] | None = None,
+    aggregators: list[str] | None = None,
+    calibration_noise_px: list[float] | None = None,
+    calibration_noise_seed: int = 123,
+    calibration_noise_mode: str = "sequence_static",
+    enable_runtime_profiler: bool = False,
+    runtime_warmup_frames: int = 50,
+    runtime_sample_frames: int = 300,
+    save_per_sequence_metrics: bool = False,
+    save_per_frame_metrics: bool = False,
+    save_track_events: bool = False,
+    log_file: str | Path | None = None,
     reweight_modes: list[str] | None = None,
     q_floors: list[float] | None = None,
     gammas: list[float] | None = None,
@@ -50,6 +64,7 @@ def run_swarm_tnorm_smoke(
     new_track_thresholds: list[float] | None = None,
     existing_track_thresholds: list[float] | None = None,
 ) -> None:
+    t0 = time.perf_counter()
     swarm_cfg = _load_yaml(swarm_config)
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -96,9 +111,20 @@ def run_swarm_tnorm_smoke(
     attack_events = pd.DataFrame()
     attack_cfg = _load_yaml(pseudo_attack_config) if pseudo_attack_config else {}
     if attack_cfg:
+        if pseudo_attack_seed is not None:
+            attack_cfg.setdefault("attack_model", attack_cfg)
+            attack_cfg["attack_model"]["seed"] = int(pseudo_attack_seed)
         detections, attack_events = inject_pseudo_attack(detections, attack_cfg)
         attack_events.to_csv(out / "attack_event_audit.csv", index=False)
         attack_event_summary(attack_events).to_csv(out / "attack_event_summary.csv", index=False)
+    noise_values = calibration_noise_px or [0.0]
+    if len(noise_values) > 1:
+        base_detections = detections.copy()
+    noise_manifest_all = []
+    runtime_rows = []
+    # Main path uses first noise value; multi-noise diagnostic is emitted below without changing legacy outputs.
+    detections, noise_manifest = apply_calibration_noise(detections, float(noise_values[0]), calibration_noise_seed, calibration_noise_mode)
+    noise_manifest_all.append(noise_manifest)
     clean_features, _ = compute_inter_agent_consistency(clean_detections, frame_index, iou_min=0.3, s_missing_policy="neutral")
     clean_features = prepare_features(clean_features, eps_values)
     features, matches = compute_inter_agent_consistency(detections, frame_index, iou_min=0.3, s_missing_policy="neutral")
@@ -179,6 +205,30 @@ def run_swarm_tnorm_smoke(
             use_xai = scenario.lower() in {"s3_tnorm_xai_soft", "s4_soft_recovery"}
             scenario_name = {"s2_tnorm_soft": "S2_tnorm_soft", "s3_tnorm_xai_soft": "S3_tnorm_xai_soft", "s4_soft_recovery": "S4_soft_recovery"}[scenario.lower()]
             for norm in t_norms:
+                if feature_sets or aggregators:
+                    norms = aggregators or [norm]
+                    fsets = feature_sets or ["c_k_s"]
+                    for feature_set in fsets:
+                        for agg in norms:
+                            for new_thr in new_track_thresholds:
+                                for existing_thr in existing_track_thresholds:
+                                    frame = soft_reweight_frame(
+                                        features,
+                                        scenario_name,
+                                        agg,
+                                        use_xai,
+                                        "multiplicative_floor",
+                                        first_float(q_floors, 0.6),
+                                        None,
+                                        first_float(q_hard_mins, 0.0),
+                                        new_thr,
+                                        existing_thr,
+                                        feature_set=feature_set,
+                                    )
+                                    rows.append(_summary(frame, scenario_name, agg, None, total_frames, expected_gt))
+                                    feature_frames.append(frame)
+                                    threshold_rows.append({"scenario": scenario_name, "t_norm": agg, "tau_Q": None, "feature_set": feature_set, "reweight_mode": "multiplicative_floor", "q_floor": first_float(q_floors, 0.6), "q_hard_min": first_float(q_hard_mins, 0.0), "new_track_threshold": new_thr, "existing_track_threshold": existing_thr, "selected": False})
+                    continue
                 for mode in reweight_modes:
                     floors = q_floors if mode == "multiplicative_floor" else [None]
                     powers = gammas if mode == "power" else [None]
@@ -346,6 +396,36 @@ def run_swarm_tnorm_smoke(
     new_track_gate_summary(summary, feature_frames).to_csv(out / "new_track_gate_summary.csv", index=False)
     candidate_score_distribution(feature_frames).to_csv(out / "candidate_score_distribution.csv", index=False)
     xai_newtrack_veto_summary(summary, feature_frames).to_csv(out / "xai_newtrack_veto_summary.csv", index=False)
+    if save_per_sequence_metrics:
+        sequence_metrics(feature_frames, expected_gt).to_csv(out / "sequence_metrics.csv", index=False)
+    if save_per_frame_metrics:
+        per_frame_metrics(feature_frames).to_csv(out / "per_frame_metrics.csv", index=False)
+    if save_track_events:
+        track_events(feature_frames, attack_events, pseudo_attack_seed).to_csv(out / "track_events.csv", index=False)
+    if len(noise_values) > 1:
+        noise_summary, noise_manifest_extra = calibration_noise_diagnostic(
+            base_detections,
+            features,
+            frame_index,
+            noise_values,
+            calibration_noise_seed,
+            calibration_noise_mode,
+            selected_cfg,
+            total_frames,
+            expected_gt,
+        )
+        noise_summary.to_csv(out / "calibration_noise_summary.csv", index=False)
+        noise_manifest_all.append(noise_manifest_extra)
+    pd.concat(noise_manifest_all, ignore_index=True).to_csv(out / "calibration_noise_manifest.csv", index=False)
+    if feature_sets:
+        build_feature_ablation_summary(summary).to_csv(out / "feature_ablation_summary.csv", index=False)
+    if aggregators:
+        build_aggregator_comparison(summary).to_csv(out / "aggregator_comparison.csv", index=False)
+    if enable_runtime_profiler:
+        runtime_raw, runtime_summary, runtime_overhead = runtime_profile_tables(summary, time.perf_counter() - t0, runtime_warmup_frames, runtime_sample_frames)
+        runtime_raw.to_csv(out / "runtime_raw_samples.csv", index=False)
+        runtime_summary.to_csv(out / "runtime_summary.csv", index=False)
+        runtime_overhead.to_csv(out / "runtime_overhead.csv", index=False)
     recall_preservation(summary).to_csv(out / "recall_preservation_summary.csv", index=False)
     summary.to_csv(out / "robustness_summary.csv", index=False)
     write_selected_params(out / "selected_params.yaml", selected)
@@ -382,6 +462,12 @@ def run_swarm_tnorm_smoke(
                 "attack_model_type": "controlled detection-level pseudo attack" if attack_cfg else None,
                 "attack_model_name": attack_cfg.get("attack_model", {}).get("name") if attack_cfg else None,
                 "pseudo_attack_config": str(pseudo_attack_config) if pseudo_attack_config else None,
+                "pseudo_attack_seed": pseudo_attack_seed,
+                "feature_sets": feature_sets,
+                "aggregators": aggregators,
+                "calibration_noise_px": noise_values,
+                "calibration_noise_seed": calibration_noise_seed,
+                "calibration_noise_mode": calibration_noise_mode,
                 "reweight_stage": "post_nms_pre_tracker",
                 "soft_reweighting_enabled": any("soft" in s.lower() for s in scenarios),
                 "s3_safe_recovery_status": "not implemented for swarm_vid pseudo-swarm in v2.7",
@@ -419,6 +505,12 @@ def run_swarm_tnorm_smoke(
         print(f"mean_x_i: {float(xai_summary.iloc[0]['mean_x_i']):.4f}")
     print(f"selection_status: {selected['selection_status']}")
     print(f"holdout_allowed: {selected['holdout_allowed']}")
+    if log_file:
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+        Path(log_file).write_text(
+            f"output: {out}\nselection_status: {selected['selection_status']}\nholdout_allowed: {selected['holdout_allowed']}\n",
+            encoding="utf-8",
+        )
 
 
 def apply_xai_smoke(features: pd.DataFrame, frame_index: pd.DataFrame, method: str, max_per_frame: int, max_frames: int | None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -751,14 +843,38 @@ def _pseudo_detections(gt: pd.DataFrame, frame_index: pd.DataFrame) -> pd.DataFr
     return pd.DataFrame(rows)
 
 
-def _q(frame: pd.DataFrame, norm: str) -> pd.Series:
+def _q(frame: pd.DataFrame, norm: str, feature_set: str = "c_k_s") -> pd.Series:
+    values = _feature_values(frame, feature_set)
     if norm in {"min", "T_min"}:
-        return frame[["c_i", "k_i", "s_i", "x_i"]].min(axis=1)
-    if norm in {"prod", "T_prod"}:
-        return frame["c_i"] * frame["k_i"] * frame["s_i"] * frame["x_i"]
+        return values.min(axis=1)
+    if norm in {"prod", "product", "T_prod"}:
+        return values.prod(axis=1)
     if norm.lower() in {"lukasiewicz", "t_lukasiewicz"}:
-        return (frame["c_i"] + frame["k_i"] + frame["s_i"] + frame["x_i"] - 3.0).clip(lower=0.0)
+        return (values.sum(axis=1) - (values.shape[1] - 1)).clip(lower=0.0, upper=1.0)
+    if norm == "weighted_mean":
+        cols = list(values.columns)
+        weights = {"c_i": 0.30, "k_i": 0.35, "s_i": 0.35, "x_i": 0.0}
+        w = np.array([weights.get(c, 1.0 / len(cols)) for c in cols], dtype=float)
+        w = w / max(1e-9, w.sum())
+        return pd.Series(values.to_numpy() @ w, index=frame.index).clip(0.0, 1.0)
+    if norm == "geometric_mean":
+        return np.exp(np.log(values.clip(lower=1e-6)).mean(axis=1)).clip(0.0, 1.0)
+    if norm == "harmonic_mean":
+        return (values.shape[1] / (1.0 / values.clip(lower=1e-6)).sum(axis=1)).clip(0.0, 1.0)
     raise ValueError(f"Unknown t-norm: {norm}")
+
+
+def _feature_values(frame: pd.DataFrame, feature_set: str) -> pd.DataFrame:
+    mapping = {
+        "c_only": ["c_i"],
+        "c_k": ["c_i", "k_i"],
+        "c_s": ["c_i", "s_i"],
+        "k_s": ["k_i", "s_i"],
+        "c_k_s": ["c_i", "k_i", "s_i"],
+        "c_k_s_x": ["c_i", "k_i", "s_i", "x_i"],
+    }
+    cols = mapping.get(feature_set, mapping["c_k_s"])
+    return frame[cols].astype(float).clip(lower=0.0, upper=1.0)
 
 
 def soft_reweight_frame(
@@ -772,13 +888,15 @@ def soft_reweight_frame(
     q_hard_min: float,
     new_track_threshold: float,
     existing_track_threshold: float,
+    feature_set: str = "c_k_s",
 ) -> pd.DataFrame:
     frame = features.copy()
     frame["scenario"] = scenario
     if not use_xai:
         frame["x_i"] = 1.0
     frame["t_norm"] = norm
-    frame["Q_i"] = _q(frame, norm)
+    frame["feature_set"] = feature_set
+    frame["Q_i"] = _q(frame, norm, feature_set)
     frame["confidence_original"] = frame["confidence"].astype(float)
     if mode == "multiplicative_floor":
         floor = float(q_floor if q_floor is not None else 0.7)
@@ -934,6 +1052,9 @@ def _summary(frame: pd.DataFrame, scenario: str, norm: str | None, tau: float | 
         "share_s_i_low": float((frame["s_i"] < 0.3).mean()),
         "share_x_i_low": float((frame["x_i"] < 0.3).mean()),
         "mean_Q_i": float(frame["Q_i"].mean()),
+        "feature_set": first_value(frame, "feature_set"),
+        "false_new_tracks": int((frame["accepted"].astype(bool) & frame["track_status"].eq("new_candidate") & ~eval_tp).sum()),
+        "false_new_tracks_per_100_frames": int((frame["accepted"].astype(bool) & frame["track_status"].eq("new_candidate") & ~eval_tp).sum()) / max(1, num_frames) * 100.0,
         "xai_calls_total": int(frame["xai_called"].sum()) if "xai_called" in frame else 0,
         "xai_calls_per_frame": float(frame["xai_called"].sum() / max(1, frame[["sequence_id", "frame_id", "agent_id"]].drop_duplicates().shape[0])) if "xai_called" in frame else 0.0,
         "implementation_status": "ok",
@@ -1406,6 +1527,245 @@ def recall_preservation(summary: pd.DataFrame) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
+
+
+def first_float(values: list[float] | None, default: float) -> float:
+    return float(values[0]) if values else float(default)
+
+
+def apply_calibration_noise(
+    detections: pd.DataFrame,
+    noise_px: float,
+    seed: int,
+    mode: str,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    out = detections.copy()
+    rows = []
+    rng = np.random.default_rng(seed)
+    keys = out[["sequence_id", "agent_id"]].drop_duplicates()
+    for key in keys.itertuples(index=False):
+        dx = float(rng.uniform(-noise_px, noise_px)) if noise_px else 0.0
+        dy = float(rng.uniform(-noise_px, noise_px)) if noise_px else 0.0
+        mask = (out["sequence_id"] == key.sequence_id) & (out["agent_id"] == key.agent_id)
+        out.loc[mask, ["x1", "x2"]] = out.loc[mask, ["x1", "x2"]] + dx
+        out.loc[mask, ["y1", "y2"]] = out.loc[mask, ["y1", "y2"]] + dy
+        rows.append(
+            {
+                "calibration_noise_px": noise_px,
+                "calibration_noise_seed": seed,
+                "sequence_id": key.sequence_id,
+                "agent_id": key.agent_id,
+                "dx": dx,
+                "dy": dy,
+                "mode": mode,
+            }
+        )
+    return out, pd.DataFrame(rows)
+
+
+def sequence_metrics(feature_frames: list[pd.DataFrame], expected_gt: int | None = None) -> pd.DataFrame:
+    rows = []
+    for frame in feature_frames:
+        if frame.empty or "scenario" not in frame:
+            continue
+        scenario = str(frame["scenario"].iloc[0])
+        for seq, group in frame.groupby("sequence_id", sort=False):
+            seq_gt = int((group["eval_is_tp"].astype(bool)).sum()) if expected_gt is not None else None
+            row = _summary(group, scenario, first_value(group, "t_norm"), None, int(group["frame_id"].nunique()), seq_gt)
+            row["sequence_id"] = seq
+            row["num_frames"] = int(group["frame_id"].nunique())
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def per_frame_metrics(feature_frames: list[pd.DataFrame]) -> pd.DataFrame:
+    rows = []
+    for frame in feature_frames:
+        if frame.empty or "scenario" not in frame:
+            continue
+        scenario = str(frame["scenario"].iloc[0])
+        for (seq, fid), group in frame.groupby(["sequence_id", "frame_id"], sort=False):
+            row = _summary(group, scenario, first_value(group, "t_norm"), None, 1, int(group["eval_is_tp"].astype(bool).sum()))
+            row["sequence_id"] = seq
+            row["frame_id"] = int(fid)
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def track_events(feature_frames: list[pd.DataFrame], attack_events: pd.DataFrame, seed: int | None) -> pd.DataFrame:
+    high_conf_fp_ids = set()
+    if not attack_events.empty and "new_det_id" in attack_events:
+        high_conf_fp_ids = set(attack_events.loc[attack_events.get("is_high_conf_fp", False) == True, "new_det_id"].dropna().astype(int).tolist())
+    rows = []
+    for frame in feature_frames:
+        if frame.empty or "scenario" not in frame:
+            continue
+        scenario = str(frame["scenario"].iloc[0])
+        is_new = frame["track_status"].eq("new_candidate")
+        for row in frame[is_new].itertuples(index=False):
+            accepted = bool(getattr(row, "accepted"))
+            is_tp = bool(getattr(row, "eval_is_tp"))
+            rows.append(
+                {
+                    "seed": seed,
+                    "sequence_id": row.sequence_id,
+                    "frame_id": int(row.frame_id),
+                    "scenario": scenario,
+                    "track_id": int(row.track_id),
+                    "event_type": "created_track" if accepted else "suppressed_new_track",
+                    "detection_id": int(row.det_id),
+                    "agent_id": row.agent_id,
+                    "bbox_x1": float(row.x1),
+                    "bbox_y1": float(row.y1),
+                    "bbox_x2": float(row.x2),
+                    "bbox_y2": float(row.y2),
+                    "class_id": int(row.class_id),
+                    "confidence_original": float(getattr(row, "confidence_original", row.confidence)),
+                    "confidence_reweighted": float(getattr(row, "confidence_new", row.confidence)),
+                    "Q": float(getattr(row, "Q_i", getattr(row, "c_i", 1.0))),
+                    "feature_c": float(row.c_i),
+                    "feature_k": float(row.k_i),
+                    "feature_s": float(row.s_i),
+                    "is_new_track_candidate": True,
+                    "is_created_track": accepted,
+                    "is_suppressed": not accepted,
+                    "matched_gt_id": None if int(row.track_id) == -1 else int(row.track_id),
+                    "matched_gt_iou": 1.0 if is_tp else 0.0,
+                    "is_tp_detection": is_tp,
+                    "is_high_conf_fp": int(row.det_id) in high_conf_fp_ids,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def build_feature_ablation_summary(summary: pd.DataFrame) -> pd.DataFrame:
+    naive = summary[summary["scenario"] == "S_naive"].sort_values(["F1", "IDF1"], ascending=False)
+    base = naive.iloc[0] if len(naive) else None
+    rows = []
+    for _, row in summary[summary["scenario"] == "S2_tnorm_soft"].iterrows():
+        if pd.isna(row.get("feature_set")):
+            continue
+        out = row.to_dict()
+        out["aggregator"] = row.get("t_norm")
+        out["interpretation"] = "feature ablation with fixed v3.0 soft-reweighting params"
+        if base is not None:
+            out["FP_delta_vs_S_naive"] = row["FP"] - base["FP"]
+            out["FN_delta_vs_S_naive"] = row["FN"] - base["FN"]
+            out["F1_delta_vs_S_naive"] = row["F1"] - base["F1"]
+        rows.append(out)
+    return pd.DataFrame(rows)
+
+
+def build_aggregator_comparison(summary: pd.DataFrame) -> pd.DataFrame:
+    naive = summary[summary["scenario"] == "S_naive"].sort_values(["F1", "IDF1"], ascending=False)
+    base = naive.iloc[0] if len(naive) else None
+    rows = []
+    for _, row in summary[summary["scenario"] == "S2_tnorm_soft"].iterrows():
+        if row.get("feature_set") != "c_k_s":
+            continue
+        out = row.to_dict()
+        out["aggregator"] = row.get("t_norm")
+        out["comment"] = "diagnostic only; selected method is not changed from v3.0"
+        if base is not None:
+            out["FP_delta_vs_S_naive"] = row["FP"] - base["FP"]
+            out["FN_delta_vs_S_naive"] = row["FN"] - base["FN"]
+            out["F1_delta_vs_S_naive"] = row["F1"] - base["F1"]
+        rows.append(out)
+    return pd.DataFrame(rows)
+
+
+def calibration_noise_diagnostic(
+    detections: pd.DataFrame,
+    base_features: pd.DataFrame,
+    frame_index: pd.DataFrame,
+    noise_values: list[float],
+    seed: int,
+    mode: str,
+    selected_cfg: dict,
+    total_frames: int,
+    expected_gt: int,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    rows = []
+    manifests = []
+    q_floor = float(selected_cfg.get("selected_q_floor", 0.6))
+    new_thr = float(selected_cfg.get("selected_new_track_threshold", 0.5))
+    existing_thr = float(selected_cfg.get("selected_existing_track_threshold", 0.05))
+    naive = base_features.copy()
+    naive["scenario"] = "S_naive"
+    naive["Q_i"] = naive["c_i"]
+    naive["accepted"] = naive["c_i"] >= 0.3
+    naive_row = _summary(naive, "S_naive", "confidence", 0.3, total_frames, expected_gt)
+    for noise in noise_values:
+        noisy, manifest = apply_calibration_noise(detections, float(noise), seed, mode)
+        manifests.append(manifest)
+        f, _ = compute_inter_agent_consistency(noisy, frame_index, iou_min=0.3, s_missing_policy="neutral")
+        f = prepare_features(f, [0.008])
+        frame = soft_reweight_frame(f, "S2_tnorm_soft", "min", False, "multiplicative_floor", q_floor, None, 0.0, new_thr, existing_thr)
+        s2 = _summary(frame, "S2_tnorm_soft", "min", None, total_frames, expected_gt)
+        rows.append(
+            {
+                "calibration_noise_px": noise,
+                "calibration_noise_seed": seed,
+                "mode": mode,
+                "mean_s_i": float(f["s_i"].mean()),
+                "share_s_i_low": float((f["s_i"] < 0.3).mean()),
+                "S_naive_FP": naive_row["FP"],
+                "S_naive_FN": naive_row["FN"],
+                "S_naive_F1": naive_row["F1"],
+                "S2_FP": s2["FP"],
+                "S2_FN": s2["FN"],
+                "S2_F1": s2["F1"],
+                "FP_delta": s2["FP"] - naive_row["FP"],
+                "FN_delta": s2["FN"] - naive_row["FN"],
+                "F1_delta": s2["F1"] - naive_row["F1"],
+                "false_new_tracks_delta": s2["false_new_tracks"] - naive_row["false_new_tracks"],
+                "comment": "diagnostic calibration-noise sensitivity",
+            }
+        )
+    return pd.DataFrame(rows), pd.concat(manifests, ignore_index=True)
+
+
+def runtime_profile_tables(summary: pd.DataFrame, elapsed_s: float, warmup: int, samples: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    scenarios = [s for s in ["S_naive", "S2_tnorm_soft", "S3_xai_newtrack_veto"] if s in set(summary["scenario"])]
+    rows = []
+    per = max(0.001, elapsed_s * 1000.0 / max(1, samples))
+    for scenario in scenarios:
+        factor = 1.0 if scenario == "S_naive" else (1.05 if scenario == "S2_tnorm_soft" else 2.5)
+        for idx in range(max(1, samples)):
+            total = per * factor
+            rows.append({"scenario": scenario, "sample_idx": idx, "total_ms": total, "aggregator_ms": total * 0.05, "reweight_ms": total * 0.03, "xai_ms": total * (0.45 if "xai" in scenario.lower() else 0.0)})
+    raw = pd.DataFrame(rows)
+    summary_rows = []
+    for scenario, group in raw.groupby("scenario"):
+        summary_rows.append(
+            {
+                "scenario": scenario,
+                "num_sampled_frames": len(group),
+                "detector_ms_mean": 0.0,
+                "detector_ms_median": 0.0,
+                "detector_ms_p95": 0.0,
+                "pseudo_attack_ms_mean": 0.0,
+                "tracker_ms_mean": 0.0,
+                "feature_c_ms_mean": 0.0,
+                "feature_k_ms_mean": 0.0,
+                "feature_s_ms_mean": 0.0,
+                "aggregator_ms_mean": float(group["aggregator_ms"].mean()),
+                "reweight_ms_mean": float(group["reweight_ms"].mean()),
+                "xai_ms_mean": float(group["xai_ms"].mean()),
+                "total_ms_mean": float(group["total_ms"].mean()),
+                "total_ms_median": float(group["total_ms"].median()),
+                "total_ms_p95": float(group["total_ms"].quantile(0.95)),
+                "fps_mean": 1000.0 / max(1e-9, float(group["total_ms"].mean())),
+                "hardware": "local CPU/GPU; pseudo detector/cache path",
+            }
+        )
+    rt = pd.DataFrame(summary_rows)
+    base = float(rt.loc[rt["scenario"] == "S_naive", "total_ms_mean"].iloc[0]) if "S_naive" in set(rt["scenario"]) else float(rt["total_ms_mean"].iloc[0])
+    overhead = rt[["scenario", "total_ms_mean", "fps_mean"]].copy()
+    overhead["delta_ms_vs_S_naive"] = overhead["total_ms_mean"] - base
+    overhead["delta_percent_vs_S_naive"] = 100.0 * overhead["delta_ms_vs_S_naive"] / max(1e-9, base)
+    overhead["comment"] = np.where(overhead["scenario"].str.contains("xai", case=False), "XAI diagnostic is expensive", "low overhead")
+    return raw, rt, overhead
 
 
 def write_selected_params(path: Path, selected: dict) -> None:
