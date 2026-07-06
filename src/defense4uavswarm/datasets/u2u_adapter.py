@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import csv
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,7 @@ except Exception:  # pragma: no cover
 from .common_multiagent_schema import AgentObservation, MultiAgentFrame, Pose, frame_to_dict
 
 
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".ppm"}
 LIDAR_EXTS = {".pcd", ".bin", ".npy", ".npz"}
 DEPTH_HINTS = {"depth", "dep"}
 
@@ -39,6 +40,9 @@ class U2UDataAdapter:
     def list_scenes(self) -> list[str]:
         if not self.root.exists():
             return []
+        grouped = self._drone_scene_dirs()
+        if grouped:
+            return sorted(grouped)
         candidates = [p for p in self.root.iterdir() if p.is_dir() and not p.name.startswith(".")]
         split_dirs = {"train", "validate", "validation", "val", "test"}
         if len(candidates) == 1 and candidates[0].name.lower() in split_dirs:
@@ -56,6 +60,9 @@ class U2UDataAdapter:
         return direct
 
     def list_agents(self, scene_id: str) -> list[str]:
+        grouped = self._drone_scene_dirs().get(scene_id)
+        if grouped:
+            return sorted(grouped)
         scene = self.scene_path(scene_id)
         if not scene.exists():
             return []
@@ -77,7 +84,7 @@ class U2UDataAdapter:
             for frame_id in frames:
                 counts[frame_id] += 1
         required = len(indexed) if indexed else 1
-        return sorted(frame_id for frame_id, count in counts.items() if count >= min(required, count))
+        return sorted(frame_id for frame_id, count in counts.items() if count >= required)
 
     def load_frame(self, scene_id: str, frame_id: int, agent_ids: list[str] | None = None) -> MultiAgentFrame:
         indexed = self._index_scene(scene_id)
@@ -137,12 +144,15 @@ class U2UDataAdapter:
     def report(self) -> dict[str, Any]:
         scenes = self.list_scenes()
         agent_counts = [len(self.list_agents(scene)) for scene in scenes[:10]]
+        synchronized = [len(self.list_frame_ids(scene, self.list_agents(scene))) for scene in scenes[:10]]
         files = list(self.root.rglob("*")) if self.root.exists() else []
         suffixes = {p.suffix.lower() for p in files if p.is_file()}
         has_rgb = bool(suffixes & IMAGE_EXTS)
         has_lidar = bool(suffixes & LIDAR_EXTS)
         has_depth = any(any(h in p.name.lower() for h in DEPTH_HINTS) for p in files if p.is_file())
-        has_labels = bool(suffixes & {".yaml", ".yml", ".json", ".txt"})
+        has_pose_files = any(p.name.lower() == "airsim_rec.txt" for p in files if p.is_file())
+        has_labels = bool(suffixes & {".yaml", ".yml", ".json"})
+        has_gt = any(name in p.name.lower() for p in files if p.is_file() for name in ["label", "annotation", "gt", "bbox"])
         return {
             "dataset": self.dataset_name,
             "dataset_root": self.root.as_posix(),
@@ -150,19 +160,24 @@ class U2UDataAdapter:
             "num_scenes": len(scenes),
             "num_agents_min_sample": min(agent_counts) if agent_counts else 0,
             "num_agents_max_sample": max(agent_counts) if agent_counts else 0,
+            "synchronized_frames_max_sample": max(synchronized) if synchronized else 0,
             "modalities_available": sorted(suffixes),
             "classes": [],
-            "has_poses": has_labels,
-            "has_3d_boxes": has_labels,
+            "has_poses": has_pose_files or has_labels,
+            "has_3d_boxes": has_gt,
+            "has_gt": has_gt,
             "has_rgb": has_rgb,
             "has_lidar": has_lidar,
             "has_depth": has_depth,
-            "usable_for_2d_tracking": has_rgb and has_labels,
-            "usable_for_3d_tracking": has_lidar and has_labels,
+            "usable_for_2d_tracking": has_rgb and has_gt,
+            "usable_for_3d_tracking": has_lidar and has_gt,
             "notes": "Install/download U2UData locally before running experiments." if not self.root.exists() else "Report is based on conservative filesystem scan.",
         }
 
     def _index_scene(self, scene_id: str) -> dict[str, dict[int, dict[str, Any]]]:
+        grouped = self._drone_scene_dirs().get(scene_id)
+        if grouped:
+            return self._index_airsim_drone_scene(grouped)
         scene = self.scene_path(scene_id)
         by_agent: dict[str, dict[int, dict[str, Any]]] = defaultdict(dict)
         if not scene.exists():
@@ -187,8 +202,50 @@ class U2UDataAdapter:
                 rec["metadata"].append(path.as_posix())
         return dict(by_agent)
 
+    def _drone_scene_dirs(self) -> dict[str, dict[str, Path]]:
+        grouped: dict[str, dict[str, Path]] = defaultdict(dict)
+        if not self.root.exists():
+            return {}
+        scan_roots = [self.root]
+        if (self.root / "extracted").is_dir():
+            scan_roots.append(self.root / "extracted")
+        for scan_root in scan_roots:
+            for path in scan_root.iterdir():
+                if not path.is_dir():
+                    continue
+                match = re.match(r"(.+)_drone_(\d+)$", path.name)
+                if match:
+                    scene_id = match.group(1)
+                    grouped[scene_id][f"drone_{match.group(2)}"] = path
+        return dict(grouped)
+
+    def _index_airsim_drone_scene(self, grouped: dict[str, Path]) -> dict[str, dict[int, dict[str, Any]]]:
+        by_agent: dict[str, dict[int, dict[str, Any]]] = defaultdict(dict)
+        for agent_id, root in grouped.items():
+            rec = root / "airsim_rec.txt"
+            if not rec.exists():
+                continue
+            rows = parse_airsim_rec(rec)
+            for frame_id, row in enumerate(rows):
+                image_name = choose_image(row.get("FumeImageFile", ""))
+                by_agent[agent_id][frame_id] = {
+                    "image_path": (root / "images" / image_name).as_posix() if image_name else None,
+                    "pose": {
+                        "x": float(row.get("POS_X", 0.0)),
+                        "y": float(row.get("POS_Y", 0.0)),
+                        "z": float(row.get("POS_Z", 0.0)),
+                        "qw": float(row.get("Q_W", 1.0)),
+                        "qx": float(row.get("Q_X", 0.0)),
+                        "qy": float(row.get("Q_Y", 0.0)),
+                        "qz": float(row.get("Q_Z", 0.0)),
+                    },
+                    "timestamp": row.get("TimeStamp", frame_id),
+                    "metadata": [rec.as_posix()],
+                }
+        return dict(by_agent)
+
     def _observation_from_record(self, agent_id: str, record: dict[str, Any]) -> AgentObservation:
-        pose = Pose()
+        pose = pose_from_record(record) or Pose()
         gt2d: list[dict[str, Any]] = []
         gt3d: list[dict[str, Any]] = []
         intrinsics = None
@@ -254,6 +311,35 @@ def parse_pose(data: dict[str, Any]) -> Pose | None:
     if isinstance(pose_data, (list, tuple)) and len(pose_data) >= 6:
         return Pose(*(float(v) for v in pose_data[:6]))
     return None
+
+
+def pose_from_record(record: dict[str, Any]) -> Pose | None:
+    pose_data = record.get("pose")
+    if not isinstance(pose_data, dict):
+        return None
+    return Pose(
+        x=float(pose_data.get("x", 0.0)),
+        y=float(pose_data.get("y", 0.0)),
+        z=float(pose_data.get("z", 0.0)),
+        roll=0.0,
+        pitch=0.0,
+        yaw=0.0,
+    )
+
+
+def parse_airsim_rec(path: Path) -> list[dict[str, str]]:
+    with path.open("r", encoding="utf-8", errors="ignore") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        return [dict(row) for row in reader]
+
+
+def choose_image(field: str) -> str | None:
+    names = [part for part in field.split(";") if part]
+    for preferred in ["front_center_0", "front_center", "back_center_0"]:
+        for name in names:
+            if preferred in name:
+                return name
+    return names[0] if names else None
 
 
 def write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> None:
