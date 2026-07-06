@@ -3,6 +3,23 @@
 Check dataset:
 
 ```bash
+export HF_TOKEN=...
+
+python scripts/download_u2u_minimal_subset.py \
+  --repo-id fengtt42/U2UData-2 \
+  --include-archives \
+  --max-files 3 \
+  --max-file-mb 5000 \
+  --max-total-gb 12 \
+  --min-free-disk-gb 25 \
+  --retries 10 \
+  --output-root data/U2UData
+
+python scripts/extract_u2u_rar_subset.py \
+  --archive-root data/U2UData \
+  --output-root data/U2UData_extracted_minimal \
+  --max-frames 300
+
 python scripts/check_u2u_dataset.py \
   --dataset-root data/U2UData \
   --output outputs/results/v7_u2u/dataset_check/u2u_dataset_report.json
