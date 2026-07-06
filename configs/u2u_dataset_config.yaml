@@ -1,0 +1,17 @@
+dataset: U2UData
+dataset_root: data/U2UData
+manifest_root: data/manifests/u2u_v7
+split: validation
+min_agents: 3
+min_synchronized_frames: 300
+preferred_modalities:
+  - rgb
+  - lidar
+  - depth
+evaluation:
+  primary_task: cooperative_tracking
+  projection_mode: prefer_dataset_pose
+  fallback_projection_mode: identity_blocked
+status_policy:
+  missing_dataset: blocked_missing_dataset
+  missing_detections: blocked_missing_detections

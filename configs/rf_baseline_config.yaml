@@ -1,0 +1,31 @@
+baseline: S2_learned_fp_gate
+model: random_forest
+train_split: calibration
+eval_split: holdout
+threshold_grid:
+  - 0.50
+  - 0.55
+  - 0.60
+  - 0.65
+  - 0.70
+  - 0.75
+  - 0.80
+  - 0.85
+  - 0.90
+features:
+  - c_i
+  - k_i
+  - s_i
+  - support_count
+  - support_ratio
+  - bbox_area
+  - bbox_aspect_ratio
+  - class_id
+  - agent_id
+  - num_detections_in_frame
+  - temporal_age
+forbidden_runtime_features:
+  - matched_gt_id
+  - matched_gt_iou
+  - is_tp_detection
+  - event_type
