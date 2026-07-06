@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -34,6 +35,7 @@ def main() -> None:
     p.add_argument("--max-file-mb", type=float, default=512.0)
     p.add_argument("--max-total-gb", type=float, default=12.0)
     p.add_argument("--allow-ext", nargs="+", default=[".json", ".yaml", ".yml", ".txt", ".csv", ".png", ".jpg", ".jpeg", ".pcd", ".bin", ".npy", ".npz"])
+    p.add_argument("--match-regex", default="")
     p.add_argument("--include-archives", action="store_true")
     p.add_argument("--extract-rar", action="store_true")
     p.add_argument("--min-free-disk-gb", type=float, default=20.0)
@@ -48,9 +50,14 @@ def main() -> None:
     allow_ext = set(args.allow_ext)
     if args.include_archives:
         allow_ext |= {".rar", ".zip", ".tar", ".gz", ".7z"}
-    selected = select_files(files, allow_ext, args.max_files)
+    selected = select_files(files, allow_ext, args.max_files, args.match_regex)
+    if not selected:
+        print(f"repo={args.repo_id} files_total={len(files)} selected=0 selected_gb=0.00 dry_run={args.dry_run}")
+        if args.dry_run:
+            return
+        raise SystemExit("No files matched the selection criteria")
     infos = {i.path: getattr(i, "size", None) for i in api.get_paths_info(args.repo_id, selected, repo_type=args.repo_type, token=token)}
-    selected = cap_total_size(selected, infos, args.max_total_gb)
+    selected = cap_total_size(selected, infos, args.max_total_gb, Path(args.output_root), args.min_free_disk_gb)
     total_gb = sum((infos.get(name) or 0) for name in selected) / (1024**3)
     print(f"repo={args.repo_id} files_total={len(files)} selected={len(selected)} selected_gb={total_gb:.2f} dry_run={args.dry_run}")
     for name in selected[:50]:
@@ -95,14 +102,18 @@ def main() -> None:
     print(f"status=done downloaded={downloaded} skipped={skipped} output={out}")
 
 
-def select_files(files: list[str], allow_ext: set[str], max_files: int) -> list[str]:
+def select_files(files: list[str], allow_ext: set[str], max_files: int, match_regex: str = "") -> list[str]:
     def score(name: str) -> tuple[int, int, str]:
         lower = name.lower()
         hint = 0 if any(part in lower for part in PREFERRED_HINTS) else 1
         image_or_lidar = 0 if Path(lower).suffix in {".png", ".jpg", ".jpeg", ".pcd", ".bin", ".npy", ".npz"} else 1
         return hint, image_or_lidar, name
 
-    filtered = [f for f in files if Path(f.lower()).suffix in allow_ext and not f.endswith("/")]
+    matcher = re.compile(match_regex, re.IGNORECASE) if match_regex else None
+    if matcher:
+        filtered = [f for f in files if matcher.search(f) and not f.endswith("/")]
+    else:
+        filtered = [f for f in files if Path(f.lower()).suffix in allow_ext and not f.endswith("/")]
     # U2UData-2 stores one RAR per drone. Prefer the first 3 drones for a minimal swarm subset.
     drone_preferred = [
         f for f in filtered
@@ -112,10 +123,13 @@ def select_files(files: list[str], allow_ext: set[str], max_files: int) -> list[
     return (sorted(drone_preferred, key=score) + sorted(other, key=score))[:max_files]
 
 
-def cap_total_size(files: list[str], sizes: dict[str, int | None], max_total_gb: float) -> list[str]:
+def cap_total_size(files: list[str], sizes: dict[str, int | None], max_total_gb: float, output_root: Path, min_free_gb: float) -> list[str]:
     total = 0
     selected = []
-    limit = max_total_gb * 1024**3
+    target = output_root if output_root.exists() else output_root.parent
+    target.mkdir(parents=True, exist_ok=True)
+    available_limit = max(0.0, shutil.disk_usage(target).free - min_free_gb * 1024**3)
+    limit = min(max_total_gb * 1024**3, available_limit)
     for name in files:
         size = sizes.get(name) or 0
         if selected and total + size > limit:

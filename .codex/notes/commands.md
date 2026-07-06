@@ -5,6 +5,12 @@ Add only verified project-specific commands.
 When checking U2UData integration, run:
 
 ```bash
+/home/lebedeffson/Code/venv/bin/python scripts/inventory_hf_repo.py \
+  --repo-id fengtt42/U2UData-2 \
+  --repo-type dataset \
+  --output outputs/results/v7_2_data_search/u2udata2_hf_inventory.csv \
+  --report outputs/results/v7_2_data_search/u2udata2_hf_inventory_report.md
+
 /home/lebedeffson/Code/venv/bin/python scripts/download_u2u_minimal_subset.py \
   --repo-id fengtt42/U2UData-2 \
   --include-archives \
@@ -41,6 +47,8 @@ When building a U2U manifest, run:
 ```
 
 For the current U2UData-2 `Scene_Sunny_Rain` subset, only 139 synchronized 3-agent frames are available and no GT boxes are present. Use `--min-frames 139` only for structure/manifest validation, not for the final Q1 experiment.
+
+When looking for the original U2UData benchmark package, first inventory the HF repo. As of v7.2, `fengtt42/U2UData` is not available as a HF dataset repo and `fengtt42/U2UData-2` exposes recorder `.rar` archives only, with no labels/annotations/OpenCOOD benchmark files.
 
 When checking the 2D projection route, run:
 

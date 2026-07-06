@@ -11,6 +11,7 @@ from defense4uavswarm.datasets.u2u_adapter import U2UDataAdapter
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--dataset-root", default="data/U2UData")
+    p.add_argument("--backend", default="auto")
     p.add_argument("--output", required=True)
     args = p.parse_args()
     report = U2UDataAdapter(args.dataset_root).report()
