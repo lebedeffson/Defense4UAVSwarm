@@ -175,3 +175,17 @@ When running the Q1 VisDrone real-detector/label-scarcity smoke path, run:
   --methods s_naive persistence_gate bayesian_existence_filter ema_confidence_gate bytetrack s2_logodds_temporal geometry_dynamic_no_multiagent rf_learned_gate \
   --output-dir outputs/results/q1_label_scarcity/yolov8n_smoke
 ```
+
+When running the full Q1 VisDrone path, reuse `feature_audit.csv` from the main comparison for label-scarcity and corruption because it avoids recomputing GT matching:
+
+```bash
+/home/lebedeffson/Code/venv/bin/python scripts/run_q1_label_scarcity.py \
+  --dataset-root data/visdrone/VisDrone2019-VID-val \
+  --detections outputs/results/q1_real_detector/detections/yolov8n_visdrone.json \
+  --feature-audit outputs/results/q1_real_detector/yolov8n_main/feature_audit.csv \
+  --label-budgets 0 0.01 0.05 0.10 0.25 1.0 \
+  --seeds 11 22 33 44 55 \
+  --split-mode sequence_chunks \
+  --methods s_naive persistence_gate bayesian_existence_filter ema_confidence_gate bytetrack s2_logodds_temporal geometry_dynamic_no_multiagent rf_learned_gate \
+  --output-dir outputs/results/q1_label_scarcity/yolov8n
+```

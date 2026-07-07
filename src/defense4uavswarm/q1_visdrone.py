@@ -112,29 +112,47 @@ def label_detections(det: pd.DataFrame, gt: pd.DataFrame, iou_threshold: float =
     if det.empty:
         return det.copy()
     d = det.copy().reset_index(drop=True)
-    d["eval_is_tp"] = False
-    d["matched_gt_id"] = ""
-    d["matched_gt_iou"] = 0.0
+    eval_is_tp = np.zeros(len(d), dtype=bool)
+    matched_gt_id = np.full(len(d), "", dtype=object)
+    matched_gt_iou = np.zeros(len(d), dtype=float)
     gt_by_key = {key: group.reset_index(drop=True) for key, group in gt.groupby(["sequence_id", "frame_id"], sort=False)}
     for key, group in d.groupby(["sequence_id", "frame_id"], sort=False):
         g = gt_by_key.get(key)
         if g is None or g.empty:
             continue
-        used: set[int] = set()
-        for idx, row in group.sort_values("confidence", ascending=False).iterrows():
-            candidates = [j for j, grow in g.iterrows() if j not in used and class_compatible(row, grow)]
-            if not candidates:
+        gt_boxes = g[["x1", "y1", "x2", "y2"]].to_numpy(dtype=float)
+        gt_names = g["class_name"].astype(str).str.lower().to_numpy()
+        gt_ids = g["object_id"].astype(str).to_numpy()
+        used = np.zeros(len(g), dtype=bool)
+        for row in group.sort_values("confidence", ascending=False).itertuples():
+            idx = int(row.Index)
+            allowed_names = compatible_gt_names(str(row.class_name).lower(), int(row.class_id) if str(row.class_id).lstrip("-").isdigit() else None)
+            compatible = np.isin(gt_names, list(allowed_names)) & (~used)
+            candidates = np.flatnonzero(compatible)
+            if len(candidates) == 0:
                 continue
-            boxes = g.loc[candidates, ["x1", "y1", "x2", "y2"]].to_numpy(dtype=float)
-            ious = vector_iou(row[["x1", "y1", "x2", "y2"]].to_numpy(dtype=float), boxes)
+            det_box = np.asarray([row.x1, row.y1, row.x2, row.y2], dtype=float)
+            ious = vector_iou(det_box, gt_boxes[candidates])
             best_pos = int(np.argmax(ious))
             if float(ious[best_pos]) >= iou_threshold:
                 gt_idx = candidates[best_pos]
-                used.add(gt_idx)
-                d.loc[idx, "eval_is_tp"] = True
-                d.loc[idx, "matched_gt_id"] = str(g.loc[gt_idx, "object_id"])
-                d.loc[idx, "matched_gt_iou"] = float(ious[best_pos])
+                used[gt_idx] = True
+                eval_is_tp[idx] = True
+                matched_gt_id[idx] = gt_ids[gt_idx]
+                matched_gt_iou[idx] = float(ious[best_pos])
+    d["eval_is_tp"] = eval_is_tp
+    d["matched_gt_id"] = matched_gt_id
+    d["matched_gt_iou"] = matched_gt_iou
     return d
+
+
+def compatible_gt_names(det_name: str, det_class_id: int | None = None) -> set[str]:
+    if det_name in COCO_TO_VISDRONE:
+        return set(COCO_TO_VISDRONE[det_name])
+    names = {det_name}
+    if det_class_id is not None and det_class_id in VISDRONE_CLASSES:
+        names.add(VISDRONE_CLASSES[det_class_id].lower())
+    return names
 
 
 def add_single_camera_features(det: pd.DataFrame, max_gap: int = 2, link_iou: float = 0.25) -> pd.DataFrame:
@@ -145,37 +163,42 @@ def add_single_camera_features(det: pd.DataFrame, max_gap: int = 2, link_iou: fl
     d["bbox_aspect_ratio"] = (d["x2"] - d["x1"]).clip(lower=1) / (d["y2"] - d["y1"]).clip(lower=1)
     d["num_detections_in_frame"] = d.groupby(["sequence_id", "frame_id"])["det_id"].transform("count")
     d["c_i"] = d["confidence"].clip(0, 1)
-    d["tracklet_id"] = ""
-    d["temporal_age"] = 0
-    d["k_i"] = 0.35
+    tracklet_ids = np.full(len(d), "", dtype=object)
+    temporal_age = np.zeros(len(d), dtype=int)
+    k_values = np.full(len(d), 0.35, dtype=float)
     next_id = 0
     for (seq, cls), group in d.groupby(["sequence_id", "class_name"], sort=False):
         active: dict[str, dict[str, Any]] = {}
         for frame_id, frame in group.groupby("frame_id", sort=True):
             assigned: set[str] = set()
-            for idx, row in frame.sort_values("confidence", ascending=False).iterrows():
+            for row in frame.sort_values("confidence", ascending=False).itertuples():
+                idx = int(row.Index)
+                row_box = np.asarray([row.x1, row.y1, row.x2, row.y2], dtype=float)
                 best_track = ""
                 best_iou = 0.0
                 for tid, state in active.items():
                     if tid in assigned or int(frame_id) - int(state["frame_id"]) > max_gap:
                         continue
-                    score = float(vector_iou(row[["x1", "y1", "x2", "y2"]].to_numpy(dtype=float), np.asarray([state["bbox"]], dtype=float))[0])
+                    score = float(vector_iou(row_box, np.asarray([state["bbox"]], dtype=float))[0])
                     if score > best_iou:
                         best_iou, best_track = score, tid
                 if best_track and best_iou >= link_iou:
                     tid = best_track
                     age = int(active[tid]["age"]) + 1
-                    d.loc[idx, "tracklet_id"] = tid
-                    d.loc[idx, "temporal_age"] = age
-                    d.loc[idx, "k_i"] = max(0.05, min(1.0, best_iou))
-                    active[tid] = {"bbox": row[["x1", "y1", "x2", "y2"]].to_numpy(dtype=float), "frame_id": int(frame_id), "age": age}
+                    tracklet_ids[idx] = tid
+                    temporal_age[idx] = age
+                    k_values[idx] = max(0.05, min(1.0, best_iou))
+                    active[tid] = {"bbox": row_box, "frame_id": int(frame_id), "age": age}
                     assigned.add(tid)
                 else:
                     next_id += 1
                     tid = f"{seq}_{cls}_trk_{next_id:08d}"
-                    d.loc[idx, "tracklet_id"] = tid
-                    active[tid] = {"bbox": row[["x1", "y1", "x2", "y2"]].to_numpy(dtype=float), "frame_id": int(frame_id), "age": 0}
+                    tracklet_ids[idx] = tid
+                    active[tid] = {"bbox": row_box, "frame_id": int(frame_id), "age": 0}
             active = {tid: st for tid, st in active.items() if int(frame_id) - int(st["frame_id"]) <= max_gap}
+    d["tracklet_id"] = tracklet_ids
+    d["temporal_age"] = temporal_age
+    d["k_i"] = k_values
     d["s_i"] = 1.0
     d["Q_i"] = np.minimum(d["c_i"], d["k_i"])
     d["confidence_new"] = d["confidence"] * (0.6 + 0.4 * d["Q_i"])

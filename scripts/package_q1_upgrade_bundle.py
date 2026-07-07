@@ -36,6 +36,8 @@ def main() -> None:
             if not result_root.exists():
                 continue
             for pth in sorted(p for p in result_root.rglob("*") if p.is_file()):
+                if pth.name.endswith("_visdrone.json") or pth.suffix == ".pkl":
+                    continue
                 zf.write(pth, f"{root}/{pth.as_posix()}")
         try:
             git = subprocess.check_output(["git", "log", "-1", "--oneline"], text=True).strip()

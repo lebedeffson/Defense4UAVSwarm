@@ -31,16 +31,23 @@ def main() -> None:
     p.add_argument("--methods", nargs="+", required=True)
     p.add_argument("--output-dir", required=True)
     p.add_argument("--chunk-size", type=int, default=100)
+    p.add_argument("--feature-audit", default="")
     args = p.parse_args()
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    det_raw = load_detections(args.detections)
-    gt = load_gt(args.dataset_root, sorted(det_raw["sequence_id"].unique()) if not det_raw.empty else None)
-    if not det_raw.empty and not gt.empty:
-        keys = det_raw[["sequence_id", "frame_id"]].drop_duplicates()
+    if args.feature_audit:
+        det = pd.read_csv(args.feature_audit)
+        gt = load_gt(args.dataset_root, sorted(det["sequence_id"].unique()) if not det.empty else None)
+        keys = det[["sequence_id", "frame_id"]].drop_duplicates()
         gt = gt.merge(keys, on=["sequence_id", "frame_id"], how="inner")
-    det = add_single_camera_features(label_detections(det_raw, gt))
+    else:
+        det_raw = load_detections(args.detections)
+        gt = load_gt(args.dataset_root, sorted(det_raw["sequence_id"].unique()) if not det_raw.empty else None)
+        if not det_raw.empty and not gt.empty:
+            keys = det_raw[["sequence_id", "frame_id"]].drop_duplicates()
+            gt = gt.merge(keys, on=["sequence_id", "frame_id"], how="inner")
+        det = add_single_camera_features(label_detections(det_raw, gt))
     chunks = make_chunk_split(gt, args.chunk_size)
     det = det.merge(chunks[["sequence_id", "frame_id", "chunk_id", "split"]], on=["sequence_id", "frame_id"], how="left")
     gt2 = gt.merge(chunks[["sequence_id", "frame_id", "chunk_id", "split"]], on=["sequence_id", "frame_id"], how="left")
