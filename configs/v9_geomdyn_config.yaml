@@ -1,0 +1,37 @@
+logodds:
+  strong_match_reward: 0.9
+  weak_match_reward: 0.4
+  miss_penalty: 0.25
+  confirm_log_odds: 1.2
+  delete_log_odds: -1.0
+  max_pending_age: 5
+  min_hits_to_confirm: 2
+  strong_iou_threshold: 0.30
+  weak_iou_threshold: 0.15
+  strong_conf_threshold: 0.40
+  weak_conf_threshold: 0.30
+mahalanobis:
+  enabled: true
+  measurement_noise_px: 20.0
+  proxy_sigma_base_px: 40.0
+  proxy_sigma_min_px: 8.0
+  proxy_sigma_max_px: 40.0
+  maha_scale: 1.0
+  max_maha_d2_clip: 25.0
+world:
+  enabled: true
+  sigma_world_m: 5.0
+  history_len: 5
+  min_history_for_velocity: 2
+  support_radius_m: 5.0
+  required_support_count: 1
+epipolar:
+  enabled: true
+  sigma_epi_px: 25.0
+  min_pair_baseline_m: 1.0
+trust:
+  q_floor: 0.6
+  new_track_threshold: 0.5
+  selected_min_support: 1
+  selected_min_temporal_age: 2
+  selected_min_confidence: 0.55

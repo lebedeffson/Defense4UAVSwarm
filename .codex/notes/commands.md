@@ -111,3 +111,38 @@ When running the controlled v8 custom UAV swarm validation, run:
 /home/lebedeffson/Code/venv/bin/python scripts/package_v8_custom_swarm_bundle.py \
   --bundle-path outputs/bundles/Defense4UAVSwarm_v8_custom_uav_swarm_bundle.zip
 ```
+
+When running the v9 geometry-dynamic temporal trust validation, run:
+
+```bash
+/home/lebedeffson/Code/venv/bin/python scripts/run_v9_geomdyn_experiment.py \
+  --manifest data/custom_uav_swarm_v8/manifest.json \
+  --gt-2d data/custom_uav_swarm_v8/gt_2d_boxes.json \
+  --gt-3d data/custom_uav_swarm_v8/gt_3d_boxes.json \
+  --detections outputs/results/v8_custom_swarm/detections/combined_stress_detections.json \
+  --scenarios s_naive s2_tnorm_soft s2_tnorm_temporal s2_tnorm_temporal_logodds s2_tnorm_temporal_logodds_maha s2_tnorm_temporal_logodds_maha_world s2_tnorm_temporal_logodds_maha_world_epi s2_support_count_gate s2_ema_confidence_gate s2_learned_fp_gate s2_v9_selected \
+  --calibration-scenes scene_001 scene_002 scene_003 \
+  --holdout-scenes scene_004 scene_005 \
+  --output-dir outputs/results/v9_geomdyn/main
+
+/home/lebedeffson/Code/venv/bin/python scripts/run_v9_robustness_sweep.py \
+  --manifest data/custom_uav_swarm_v8/manifest.json \
+  --gt-2d data/custom_uav_swarm_v8/gt_2d_boxes.json \
+  --gt-3d data/custom_uav_swarm_v8/gt_3d_boxes.json \
+  --detections outputs/results/v8_custom_swarm/detections/combined_stress_detections.json \
+  --scenarios s2_tnorm_temporal s2_v9_selected s2_learned_fp_gate \
+  --selected-params outputs/results/v9_geomdyn/main/v9_selected_params.yaml \
+  --sync-delay-frames 0 1 2 3 \
+  --pose-noise-translation-m 0 0.5 1.0 2.0 \
+  --pose-noise-yaw-deg 0 1 3 5 \
+  --agent-dropout-prob 0.0 0.1 0.3 0.5 \
+  --combined-stress \
+  --output-dir outputs/results/v9_geomdyn/robustness
+
+/home/lebedeffson/Code/venv/bin/python scripts/run_v9_runtime_benchmark.py \
+  --manifest data/custom_uav_swarm_v8/manifest.json \
+  --detections outputs/results/v8_custom_swarm/detections/combined_stress_detections.json \
+  --scenarios s2_tnorm_temporal s2_v9_selected s2_learned_fp_gate \
+  --selected-params outputs/results/v9_geomdyn/main/v9_selected_params.yaml \
+  --output-dir outputs/results/v9_geomdyn/runtime
+```
