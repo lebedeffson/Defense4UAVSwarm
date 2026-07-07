@@ -146,3 +146,32 @@ When running the v9 geometry-dynamic temporal trust validation, run:
   --selected-params outputs/results/v9_geomdyn/main/v9_selected_params.yaml \
   --output-dir outputs/results/v9_geomdyn/runtime
 ```
+
+When running the Q1 VisDrone real-detector/label-scarcity smoke path, run:
+
+```bash
+/home/lebedeffson/Code/venv/bin/python scripts/run_real_detector_visdrone.py \
+  --dataset-root data/visdrone/VisDrone2019-VID-val \
+  --model yolov8n.pt \
+  --device auto \
+  --conf 0.05 \
+  --iou 0.7 \
+  --limit-frames 20 \
+  --output outputs/results/q1_real_detector/detections/yolov8n_visdrone_smoke.json \
+  --runtime-output outputs/results/q1_real_detector/detections/yolov8n_runtime_smoke.csv
+
+/home/lebedeffson/Code/venv/bin/python scripts/run_q1_real_detector_trust_experiment.py \
+  --dataset-root data/visdrone/VisDrone2019-VID-val \
+  --detections outputs/results/q1_real_detector/detections/yolov8n_visdrone_smoke.json \
+  --methods s_naive persistence_gate bayesian_existence_filter ema_confidence_gate bytetrack s2_logodds_temporal geometry_dynamic_no_multiagent rf_learned_gate \
+  --output-dir outputs/results/q1_real_detector/yolov8n_smoke_main
+
+/home/lebedeffson/Code/venv/bin/python scripts/run_q1_label_scarcity.py \
+  --dataset-root data/visdrone/VisDrone2019-VID-val \
+  --detections outputs/results/q1_real_detector/detections/yolov8n_visdrone_smoke.json \
+  --label-budgets 0 0.01 0.05 \
+  --seeds 11 22 \
+  --split-mode sequence_chunks \
+  --methods s_naive persistence_gate bayesian_existence_filter ema_confidence_gate bytetrack s2_logodds_temporal geometry_dynamic_no_multiagent rf_learned_gate \
+  --output-dir outputs/results/q1_label_scarcity/yolov8n_smoke
+```
