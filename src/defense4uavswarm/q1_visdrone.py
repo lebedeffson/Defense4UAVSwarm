@@ -393,3 +393,103 @@ def load_model(path: str | Path) -> tuple[Any, float]:
     with Path(path).open("rb") as f:
         payload = pickle.load(f)
     return payload["model"], float(payload.get("threshold", 0.55))
+
+
+def ensure_area_norm(det: pd.DataFrame) -> pd.DataFrame:
+    d = det.copy()
+    if "bbox_area_norm" in d:
+        return d
+    if "image_area" not in d:
+        if "image_path" in d and d["image_path"].astype(str).str.len().gt(0).any():
+            try:
+                import cv2
+                sizes: dict[str, float] = {}
+                for path in sorted(set(d["image_path"].astype(str))):
+                    img = cv2.imread(path)
+                    if img is not None:
+                        h, w = img.shape[:2]
+                        sizes[path] = float(w * h)
+                d["image_area"] = d["image_path"].astype(str).map(sizes).fillna(1920.0 * 1080.0)
+            except Exception:
+                d["image_area"] = 1920.0 * 1080.0
+        else:
+            d["image_area"] = 1920.0 * 1080.0
+    d["bbox_area_norm"] = (d["bbox_area"].astype(float) / d["image_area"].astype(float).clip(lower=1)).clip(0, 1)
+    return d
+
+
+def calibration_adaptive_stats(det_cal: pd.DataFrame) -> dict[str, float]:
+    d = ensure_area_norm(det_cal)
+    per_frame = d.groupby(["sequence_id", "frame_id"])["det_id"].count()
+    density_ref = float(np.percentile(per_frame.to_numpy(dtype=float), 95)) if len(per_frame) else 1.0
+    return {
+        "density_ref": max(1.0, density_ref),
+        "small_area_q": float(d["bbox_area_norm"].quantile(0.25)) if len(d) else 0.001,
+        "medium_area_q": float(d["bbox_area_norm"].quantile(0.60)) if len(d) else 0.01,
+    }
+
+
+def density_adaptive_threshold(num_detections: pd.Series, cfg: dict[str, Any]) -> pd.Series:
+    density_ref = max(EPS, float(cfg.get("density_ref", 1.0)))
+    factor = (num_detections.astype(float) / density_ref).clip(0, 1)
+    threshold = float(cfg.get("base_threshold", 0.50)) - float(cfg.get("density_gain", 0.08)) * factor
+    return threshold.clip(float(cfg.get("min_threshold", 0.40)), float(cfg.get("max_threshold", 0.60)))
+
+
+def area_q_floor(area_norm: pd.Series, cfg: dict[str, Any]) -> pd.Series:
+    small_q = float(cfg.get("small_area_q", area_norm.quantile(0.25) if len(area_norm) else 0.001))
+    medium_q = float(cfg.get("medium_area_q", area_norm.quantile(0.60) if len(area_norm) else 0.01))
+    small_floor = float(cfg.get("small_q_floor", 0.75))
+    medium_floor = float(cfg.get("medium_q_floor", 0.65))
+    large_floor = float(cfg.get("large_q_floor", 0.55))
+    values = np.where(area_norm < small_q, small_floor, np.where(area_norm < medium_q, medium_floor, large_floor))
+    return pd.Series(values, index=area_norm.index)
+
+
+def adaptive_geometry_acceptance(det: pd.DataFrame, cfg: dict[str, Any]) -> pd.Series:
+    if det.empty:
+        return pd.Series([], dtype=bool)
+    d = ensure_area_norm(det)
+    c = d["c_i"].astype(float).clip(0, 1)
+    k = d["k_i"].astype(float).clip(0, 1)
+    threshold_iou = max(EPS, float(cfg.get("temporal_support_threshold", 0.30)))
+    temporal_available = d["temporal_age"].astype(float) > 0
+    temporal_support = (k / threshold_iou).clip(0, 1)
+    k_eff = np.maximum(k, temporal_support.where(temporal_available, k))
+    aggregator = str(cfg.get("aggregator", "min"))
+    if aggregator == "geometric_mean":
+        alpha = float(cfg.get("alpha", 0.35))
+        beta = float(cfg.get("beta", 0.35))
+        delta = float(cfg.get("delta", 0.30))
+        t_eff = temporal_support.where(temporal_available, 1.0).astype(float).clip(EPS, 1)
+        q = ((c.clip(EPS, 1) ** alpha) * (pd.Series(k_eff, index=d.index).clip(EPS, 1) ** beta) * (t_eff ** delta)) ** (1.0 / max(EPS, alpha + beta + delta))
+    else:
+        q = np.minimum(c, k_eff)
+    q_floor = area_q_floor(d["bbox_area_norm"].astype(float), cfg)
+    conf_rw = d["confidence"].astype(float) * (q_floor + (1.0 - q_floor) * pd.Series(q, index=d.index))
+    threshold = density_adaptive_threshold(d["num_detections_in_frame"], cfg)
+    accepted = conf_rw >= threshold
+    if bool(cfg.get("use_recovery", True)):
+        recovery = (d["temporal_age"].astype(float) >= float(cfg.get("recovery_min_age", 2))) & (d["confidence"].astype(float) >= float(cfg.get("recovery_conf", 0.10)))
+        accepted = accepted | recovery
+    return pd.Series(accepted, index=d.index)
+
+
+def add_adaptive_metrics(det: pd.DataFrame, gt: pd.DataFrame, cfg: dict[str, Any], method: str) -> dict[str, Any]:
+    accepted = adaptive_geometry_acceptance(det, cfg)
+    return compute_metrics(det, accepted, len(gt), max(1, gt[["sequence_id", "frame_id"]].drop_duplicates().shape[0]), method)
+
+
+def pareto_flags(frame: pd.DataFrame, f1_col: str = "F1", false_col: str = "false_new_tracks") -> pd.Series:
+    flags = []
+    values = frame[[f1_col, false_col]].to_numpy(dtype=float)
+    for i, (f1, false_new) in enumerate(values):
+        dominated = False
+        for j, (other_f1, other_false) in enumerate(values):
+            if i == j:
+                continue
+            if other_f1 >= f1 and other_false <= false_new and (other_f1 > f1 or other_false < false_new):
+                dominated = True
+                break
+        flags.append(not dominated)
+    return pd.Series(flags, index=frame.index)

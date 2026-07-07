@@ -189,3 +189,24 @@ When running the full Q1 VisDrone path, reuse `feature_audit.csv` from the main 
   --methods s_naive persistence_gate bayesian_existence_filter ema_confidence_gate bytetrack s2_logodds_temporal geometry_dynamic_no_multiagent rf_learned_gate \
   --output-dir outputs/results/q1_label_scarcity/yolov8n
 ```
+
+When running the Q1 improvement Pareto sweep, use the real-detector `feature_audit.csv` and select on calibration chunks only:
+
+```bash
+/home/lebedeffson/Code/venv/bin/python scripts/run_q1_improvement_sweep.py \
+  --dataset-root data/visdrone/VisDrone2019-VID-val \
+  --detections outputs/results/q1_real_detector/detections/yolov8s_visdrone.json \
+  --feature-audit outputs/results/q1_real_detector/yolov8s_main/feature_audit.csv \
+  --split-mode sequence_chunks \
+  --calibration-only \
+  --base-method geometry_dynamic_no_multiagent \
+  --output-dir outputs/results/q1_improvement/yolov8s_sweep
+
+/home/lebedeffson/Code/venv/bin/python scripts/run_q1_improvement_holdout.py \
+  --dataset-root data/visdrone/VisDrone2019-VID-val \
+  --detections outputs/results/q1_real_detector/detections/yolov8s_visdrone.json \
+  --feature-audit outputs/results/q1_real_detector/yolov8s_main/feature_audit.csv \
+  --selected-configs outputs/results/q1_improvement/yolov8s_sweep/selected_configs.yaml \
+  --methods geometry_dynamic_no_multiagent geometry_dynamic_adaptive_balanced geometry_dynamic_false_new_safe bytetrack rf_learned_gate persistence_gate bayesian_existence_filter \
+  --output-dir outputs/results/q1_improvement/yolov8s_holdout
+```
