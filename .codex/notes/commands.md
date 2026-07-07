@@ -66,3 +66,48 @@ When packaging the v7 Q1 closure bundle, run:
 ```bash
 /home/lebedeffson/Code/venv/bin/python scripts/package_v7_q1_bundle.py
 ```
+
+When running the controlled v8 custom UAV swarm validation, run:
+
+```bash
+/home/lebedeffson/Code/venv/bin/python scripts/generate_custom_uav_swarm_v8.py \
+  --output-root data/custom_uav_swarm_v8 \
+  --num-scenes 5 \
+  --num-agents 3 \
+  --frames-per-scene 300 \
+  --objects-per-scene 25 \
+  --image-width 1280 \
+  --image-height 720 \
+  --seed 2026 \
+  --write-images \
+  --write-gt-2d \
+  --write-gt-3d \
+  --write-poses \
+  --write-calibration
+
+/home/lebedeffson/Code/venv/bin/python scripts/generate_synthetic_detections_v8.py \
+  --manifest data/custom_uav_swarm_v8/manifest.json \
+  --gt-2d data/custom_uav_swarm_v8/gt_2d_boxes.json \
+  --scenario combined_stress \
+  --tp-detection-prob 0.85 \
+  --bbox-jitter-px 5 \
+  --fp-rate-per-frame 2.0 \
+  --false-burst-prob 0.08 \
+  --false-burst-min-duration 1 \
+  --false-burst-max-duration 3 \
+  --seed 2026 \
+  --output outputs/results/v8_custom_swarm/detections/combined_stress_detections.json
+
+/home/lebedeffson/Code/venv/bin/python scripts/run_v8_custom_swarm_experiment.py \
+  --manifest data/custom_uav_swarm_v8/manifest.json \
+  --gt-2d data/custom_uav_swarm_v8/gt_2d_boxes.json \
+  --gt-3d data/custom_uav_swarm_v8/gt_3d_boxes.json \
+  --detections outputs/results/v8_custom_swarm/detections/combined_stress_detections.json \
+  --scenarios s_naive s2_tnorm_soft s2_tnorm_temporal s2_ema_confidence_gate s2_support_count_gate s2_learned_fp_gate \
+  --selected-params configs/selected_s2_temporal.yaml \
+  --split holdout \
+  --output-dir outputs/results/v8_custom_swarm/main_holdout
+
+/home/lebedeffson/Code/venv/bin/python scripts/package_v8_custom_swarm_bundle.py \
+  --bundle-path outputs/bundles/Defense4UAVSwarm_v8_custom_uav_swarm_bundle.zip
+```
