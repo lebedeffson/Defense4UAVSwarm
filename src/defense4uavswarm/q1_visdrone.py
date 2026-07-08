@@ -25,6 +25,12 @@ COCO_TO_VISDRONE = {
     "bus": {"bus"},
     "motorcycle": {"motor"},
 }
+COARSE_GROUPS = {
+    "person_like": {"pedestrian", "people", "person"},
+    "vehicle_like": {"car", "van", "truck", "bus"},
+    "two_wheel_like": {"bicycle", "motor", "motorcycle", "tricycle", "awning-tricycle"},
+}
+IGNORE_CLASS_NAMES = {"ignored", "others", "unknown"}
 
 
 @dataclass(frozen=True)
@@ -63,6 +69,62 @@ def load_gt(dataset_root: str | Path, sequence_ids: list[str] | None = None) -> 
     gt = gt.rename(columns={"gt_track_id": "object_id"}).copy()
     gt["object_id"] = gt["object_id"].astype(str)
     return gt
+
+
+def load_gt_protocol(dataset_root: str | Path, sequence_ids: list[str] | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    raw = load_visdrone_annotations_raw(dataset_root, sequence_ids)
+    if raw.empty:
+        return raw.copy(), raw.copy()
+    eval_gt = raw[~raw["is_ignored"].astype(bool)].copy()
+    eval_gt = eval_gt.rename(columns={"gt_track_id": "object_id"})
+    eval_gt["object_id"] = eval_gt["object_id"].astype(str)
+    ignored = raw[raw["is_ignored"].astype(bool)].copy()
+    return eval_gt.reset_index(drop=True), ignored.reset_index(drop=True)
+
+
+def load_visdrone_annotations_raw(dataset_root: str | Path, sequence_ids: list[str] | None = None) -> pd.DataFrame:
+    ds = VisDroneDataset(dataset_root, "val", subset_hint="VID")
+    rows: list[dict[str, Any]] = []
+    for seq in sequence_ids or ds.sequence_ids():
+        path = ds.annotations_dir / f"{seq}.txt"
+        if not path.exists():
+            continue
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                parts = [x.strip() for x in line.strip().split(",")]
+                if len(parts) < 8:
+                    continue
+                vals = [float(x) for x in parts[:10]]
+                if len(vals) >= 10:
+                    frame_id, track_id, x, y, w, h, score, cls, trunc, occ = vals[:10]
+                else:
+                    frame_id, x, y, w, h, score, cls, trunc = vals[:8]
+                    track_id, occ = -1, 0
+                class_id = int(cls)
+                class_name = VISDRONE_CLASSES.get(class_id, "unknown")
+                is_ignored = class_id <= 0 or class_id >= 11 or score <= 0
+                rows.append(
+                    {
+                        "sequence_id": seq,
+                        "frame_id": int(frame_id),
+                        "gt_track_id": int(track_id),
+                        "class_id": class_id,
+                        "class_name": class_name,
+                        "x": float(x),
+                        "y": float(y),
+                        "w": float(w),
+                        "h": float(h),
+                        "x1": float(x),
+                        "y1": float(y),
+                        "x2": float(x + w),
+                        "y2": float(y + h),
+                        "score": float(score),
+                        "truncation": float(trunc),
+                        "occlusion": float(occ),
+                        "is_ignored": bool(is_ignored),
+                    }
+                )
+    return pd.DataFrame(rows)
 
 
 def load_detections(path: str | Path) -> pd.DataFrame:
@@ -108,6 +170,33 @@ def class_compatible(det: pd.Series, gt: pd.Series) -> bool:
     return VISDRONE_CLASSES.get(det_id, "").lower() == gt_name
 
 
+def class_group(name: str) -> str:
+    n = str(name).lower()
+    for group, names in COARSE_GROUPS.items():
+        if n in names:
+            return group
+    return n
+
+
+def compatible_by_mode(det_name: str, det_class_id: int | None, gt_name: str, gt_class_id: int | None, matching_mode: str) -> bool:
+    mode = matching_mode.lower()
+    det_name = str(det_name).lower()
+    gt_name = str(gt_name).lower()
+    if mode == "class_agnostic":
+        return True
+    if mode == "vehicle_person_only":
+        return class_group(det_name) in {"person_like", "vehicle_like"} and class_group(det_name) == class_group(gt_name)
+    if mode == "coarse_class":
+        return class_group(det_name) == class_group(gt_name)
+    if mode == "class_aware":
+        if det_name == gt_name:
+            return True
+        if det_class_id is not None and gt_class_id is not None and det_class_id == gt_class_id:
+            return True
+        return False
+    return compatible_by_mode(det_name, det_class_id, gt_name, gt_class_id, "coarse_class")
+
+
 def label_detections(det: pd.DataFrame, gt: pd.DataFrame, iou_threshold: float = 0.5) -> pd.DataFrame:
     if det.empty:
         return det.copy()
@@ -144,6 +233,114 @@ def label_detections(det: pd.DataFrame, gt: pd.DataFrame, iou_threshold: float =
     d["matched_gt_id"] = matched_gt_id
     d["matched_gt_iou"] = matched_gt_iou
     return d
+
+
+def label_detections_protocol(
+    det: pd.DataFrame,
+    gt: pd.DataFrame,
+    ignored: pd.DataFrame | None = None,
+    iou_threshold: float = 0.5,
+    matching_mode: str = "coarse_class",
+    ignore_policy: str = "exclude_ignored",
+    detector_conf_threshold: float | None = None,
+) -> pd.DataFrame:
+    if det.empty:
+        return det.copy()
+    d = det.copy().reset_index(drop=True)
+    if detector_conf_threshold is not None:
+        d = d[d["confidence"].astype(float) >= float(detector_conf_threshold)].copy().reset_index(drop=True)
+    d = annotate_ignored_detections(d, ignored if ignored is not None else pd.DataFrame())
+    if ignore_policy == "exclude_ignored":
+        d = d[~d["inside_ignored_region"].astype(bool)].copy().reset_index(drop=True)
+    elif ignore_policy not in {"count_ignored", "report_ignored"}:
+        raise ValueError(f"Unknown ignore_policy: {ignore_policy}")
+    eval_is_tp = np.zeros(len(d), dtype=bool)
+    matched_gt_id = np.full(len(d), "", dtype=object)
+    matched_gt_iou = np.zeros(len(d), dtype=float)
+    if gt.empty:
+        d["eval_is_tp"] = eval_is_tp
+        d["matched_gt_id"] = matched_gt_id
+        d["matched_gt_iou"] = matched_gt_iou
+        return d
+    gt_by_key = {key: group.reset_index(drop=True) for key, group in gt.groupby(["sequence_id", "frame_id"], sort=False)}
+    for key, group in d.groupby(["sequence_id", "frame_id"], sort=False):
+        g = gt_by_key.get(key)
+        if g is None or g.empty:
+            continue
+        gt_boxes = g[["x1", "y1", "x2", "y2"]].to_numpy(dtype=float)
+        gt_names = g["class_name"].astype(str).str.lower().to_numpy()
+        gt_class_ids = g["class_id"].astype(int).to_numpy() if "class_id" in g else np.full(len(g), -999)
+        gt_ids = (g["object_id"] if "object_id" in g else g["gt_track_id"]).astype(str).to_numpy()
+        used = np.zeros(len(g), dtype=bool)
+        for row in group.sort_values("confidence", ascending=False).itertuples():
+            idx = int(row.Index)
+            try:
+                det_cls = int(row.class_id)
+            except Exception:
+                det_cls = None
+            compatible = np.array(
+                [
+                    compatible_by_mode(str(row.class_name), det_cls, gt_names[i], int(gt_class_ids[i]), matching_mode)
+                    for i in range(len(g))
+                ],
+                dtype=bool,
+            ) & (~used)
+            candidates = np.flatnonzero(compatible)
+            if len(candidates) == 0:
+                continue
+            det_box = np.asarray([row.x1, row.y1, row.x2, row.y2], dtype=float)
+            ious = vector_iou(det_box, gt_boxes[candidates])
+            best_pos = int(np.argmax(ious))
+            if float(ious[best_pos]) >= iou_threshold:
+                gt_idx = candidates[best_pos]
+                used[gt_idx] = True
+                eval_is_tp[idx] = True
+                matched_gt_id[idx] = gt_ids[gt_idx]
+                matched_gt_iou[idx] = float(ious[best_pos])
+    d["eval_is_tp"] = eval_is_tp
+    d["matched_gt_id"] = matched_gt_id
+    d["matched_gt_iou"] = matched_gt_iou
+    return d
+
+
+def annotate_ignored_detections(det: pd.DataFrame, ignored: pd.DataFrame) -> pd.DataFrame:
+    d = det.copy()
+    d["inside_ignored_region"] = False
+    d["ignored_iou"] = 0.0
+    if d.empty or ignored is None or ignored.empty:
+        return d
+    ignored_by_key = {key: group.reset_index(drop=True) for key, group in ignored.groupby(["sequence_id", "frame_id"], sort=False)}
+    inside = np.zeros(len(d), dtype=bool)
+    max_iou = np.zeros(len(d), dtype=float)
+    for key, group in d.groupby(["sequence_id", "frame_id"], sort=False):
+        ig = ignored_by_key.get(key)
+        if ig is None or ig.empty:
+            continue
+        ig_boxes = ig[["x1", "y1", "x2", "y2"]].to_numpy(dtype=float)
+        for row in group.itertuples():
+            idx = int(row.Index)
+            box = np.asarray([row.x1, row.y1, row.x2, row.y2], dtype=float)
+            cx = 0.5 * (box[0] + box[2])
+            cy = 0.5 * (box[1] + box[3])
+            center_inside = ((ig_boxes[:, 0] <= cx) & (cx <= ig_boxes[:, 2]) & (ig_boxes[:, 1] <= cy) & (cy <= ig_boxes[:, 3]))
+            ious = vector_iou(box, ig_boxes)
+            max_iou[idx] = float(ious.max()) if len(ious) else 0.0
+            inside[idx] = bool(center_inside.any() or max_iou[idx] >= 0.5)
+    d["inside_ignored_region"] = inside
+    d["ignored_iou"] = max_iou
+    return d
+
+
+def load_selected_detector_threshold(path: str | Path) -> float:
+    import yaml
+
+    payload = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    for key in ("selected_threshold", "detector_conf_threshold", "confidence_threshold"):
+        if key in payload:
+            return float(payload[key])
+    if "best" in payload and isinstance(payload["best"], dict) and "conf_threshold" in payload["best"]:
+        return float(payload["best"]["conf_threshold"])
+    raise ValueError(f"Cannot find selected threshold in {path}")
 
 
 def compatible_gt_names(det_name: str, det_class_id: int | None = None) -> set[str]:
@@ -324,6 +521,8 @@ def count_false_new_tracks(acc: pd.DataFrame) -> int:
     fp = acc[~acc["eval_is_tp"].astype(bool)]
     if fp.empty:
         return 0
+    if "tracklet_id" not in fp:
+        return int(len(fp))
     first = fp.sort_values("frame_id").groupby("tracklet_id", sort=False).head(1)
     return int(len(first))
 

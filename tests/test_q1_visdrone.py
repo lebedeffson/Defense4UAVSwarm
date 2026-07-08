@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from defense4uavswarm.q1_visdrone import add_single_camera_features, evaluate_methods, label_detections, make_chunk_split, select_budget_chunks
+from defense4uavswarm.q1_visdrone import add_single_camera_features, evaluate_methods, label_detections, label_detections_protocol, make_chunk_split, select_budget_chunks
 
 
 def test_q1_matching_and_false_new_tracks() -> None:
@@ -38,3 +38,27 @@ def test_q1_chunk_budget_split_is_chunk_based() -> None:
     assert selected
     assert all(chunk.startswith("s1_chunk_") for chunk in selected)
     assert not set(chunks[chunks["split"].eq("holdout")]["chunk_id"]).intersection(selected)
+
+
+def test_q1_protocol_coarse_class_and_ignore_regions() -> None:
+    gt = pd.DataFrame(
+        [
+            {"sequence_id": "s1", "frame_id": 1, "object_id": "g1", "class_id": 5, "class_name": "van", "x1": 0, "y1": 0, "x2": 20, "y2": 20},
+        ]
+    )
+    ignored = pd.DataFrame(
+        [
+            {"sequence_id": "s1", "frame_id": 1, "class_id": 0, "class_name": "ignored", "x1": 40, "y1": 40, "x2": 80, "y2": 80},
+        ]
+    )
+    det = pd.DataFrame(
+        [
+            {"det_id": "car_on_van", "sequence_id": "s1", "frame_id": 1, "class_id": 2, "class_name": "car", "bbox": [0, 0, 20, 20], "confidence": 0.9, "x1": 0, "y1": 0, "x2": 20, "y2": 20},
+            {"det_id": "ignored_fp", "sequence_id": "s1", "frame_id": 1, "class_id": 2, "class_name": "car", "bbox": [50, 50, 60, 60], "confidence": 0.9, "x1": 50, "y1": 50, "x2": 60, "y2": 60},
+        ]
+    )
+    strict = label_detections_protocol(det, gt, ignored, matching_mode="class_aware", ignore_policy="exclude_ignored")
+    coarse = label_detections_protocol(det, gt, ignored, matching_mode="coarse_class", ignore_policy="exclude_ignored")
+    assert len(coarse) == 1
+    assert not bool(strict.iloc[0]["eval_is_tp"])
+    assert bool(coarse.iloc[0]["eval_is_tp"])

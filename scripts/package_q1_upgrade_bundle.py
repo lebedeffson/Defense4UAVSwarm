@@ -26,6 +26,8 @@ def main() -> None:
         Path("outputs/results/q1_corruption_robustness"),
         Path("outputs/results/q1_summary"),
         Path("outputs/results/q1_improvement"),
+        Path("outputs/results/q1_audit"),
+        Path("outputs/results/q1_final_corrected"),
         Path("outputs/results/q1_reproducibility"),
     ]
     with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_DEFLATED) as zf:

@@ -14,8 +14,11 @@ from defense4uavswarm.q1_visdrone import (
     ensure_area_norm,
     evaluate_methods,
     label_detections,
+    label_detections_protocol,
     load_detections,
     load_gt,
+    load_gt_protocol,
+    load_selected_detector_threshold,
     make_chunk_split,
     method_acceptance,
     save_model,
@@ -36,10 +39,18 @@ def main() -> None:
     p.add_argument("--chunk-size", type=int, default=100)
     p.add_argument("--feature-audit", default="")
     p.add_argument("--selected-configs", default="")
+    p.add_argument("--matching-mode", default="coarse_class")
+    p.add_argument("--ignore-policy", default="exclude_ignored")
+    p.add_argument("--iou-threshold", type=float, default=0.5)
+    p.add_argument("--detector-conf-threshold", type=float, default=0.05)
+    p.add_argument("--detector-conf-threshold-from", default="")
     args = p.parse_args()
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
+    conf_threshold = args.detector_conf_threshold
+    if args.detector_conf_threshold_from:
+        conf_threshold = load_selected_detector_threshold(args.detector_conf_threshold_from)
     if args.feature_audit:
         det = ensure_area_norm(pd.read_csv(args.feature_audit))
         gt = load_gt(args.dataset_root, sorted(det["sequence_id"].unique()) if not det.empty else None)
@@ -47,11 +58,12 @@ def main() -> None:
         gt = gt.merge(keys, on=["sequence_id", "frame_id"], how="inner")
     else:
         det_raw = load_detections(args.detections)
-        gt = load_gt(args.dataset_root, sorted(det_raw["sequence_id"].unique()) if not det_raw.empty else None)
+        gt, ignored = load_gt_protocol(args.dataset_root, sorted(det_raw["sequence_id"].unique()) if not det_raw.empty else None)
         if not det_raw.empty and not gt.empty:
             keys = det_raw[["sequence_id", "frame_id"]].drop_duplicates()
             gt = gt.merge(keys, on=["sequence_id", "frame_id"], how="inner")
-        det = ensure_area_norm(add_single_camera_features(label_detections(det_raw, gt)))
+            ignored = ignored.merge(keys, on=["sequence_id", "frame_id"], how="inner") if not ignored.empty else ignored
+        det = ensure_area_norm(add_single_camera_features(label_detections_protocol(det_raw, gt, ignored, args.iou_threshold, args.matching_mode, args.ignore_policy, conf_threshold)))
     chunks = make_chunk_split(gt, args.chunk_size)
     det = det.merge(chunks[["sequence_id", "frame_id", "chunk_id", "split"]], on=["sequence_id", "frame_id"], how="left")
     gt2 = gt.merge(chunks[["sequence_id", "frame_id", "chunk_id", "split"]], on=["sequence_id", "frame_id"], how="left")
@@ -93,6 +105,17 @@ def main() -> None:
     mean.to_csv(out / "label_budget_mean_std.csv", index=False)
     raw[["label_budget", "seed", "method", "F1", "false_new_tracks", "available"]].to_csv(out / "label_budget_plot.csv", index=False)
     chunks.to_csv(out / "chunk_split.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "matching_mode": args.matching_mode,
+                "ignore_policy": args.ignore_policy,
+                "iou_threshold": args.iou_threshold,
+                "detector_conf_threshold": conf_threshold,
+                "split_mode": args.split_mode,
+            }
+        ]
+    ).to_csv(out / "protocol_metadata.csv", index=False)
     print(f"status=ok rows={len(raw)} output={out / 'label_budget_mean_std.csv'}")
 
 
