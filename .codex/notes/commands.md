@@ -210,3 +210,24 @@ When running the Q1 improvement Pareto sweep, use the real-detector `feature_aud
   --methods geometry_dynamic_no_multiagent geometry_dynamic_adaptive_balanced geometry_dynamic_false_new_safe bytetrack rf_learned_gate persistence_gate bayesian_existence_filter \
   --output-dir outputs/results/q1_improvement/yolov8s_holdout
 ```
+
+When running the Q1 final-plus package, use saved corrected VisDrone features and keep external tracker claims strict: OC-SORT/StrongSORT require a successful real adapter import; otherwise write unavailable logs instead of proxy metrics.
+
+```bash
+/home/lebedeffson/Code/venv/bin/python scripts/run_q1_tracker_comparison.py \
+  --dataset-root data/visdrone/VisDrone2019-VID-val \
+  --detections outputs/results/q1_real_detector/detections/yolov8s_visdrone.json \
+  --detector yolov8s \
+  --trackers bytetrack ocsort strongsort \
+  --trust-modes none geometry_dynamic_no_multiagent geometry_dynamic_adaptive_balanced geometry_dynamic_false_new_safe \
+  --matching-mode coarse_class \
+  --ignore-policy exclude_ignored \
+  --iou-threshold 0.5 \
+  --detector-conf-threshold 0.1 \
+  --output-dir outputs/results/q1_final_plus/tracker_comparison_yolov8s
+
+/home/lebedeffson/Code/venv/bin/python scripts/summarize_q1_final_plus.py
+
+/home/lebedeffson/Code/venv/bin/python scripts/package_q1_final_plus_bundle.py \
+  --output outputs/bundles/Defense4UAVSwarm_q1_final_plus_bundle.zip
+```
