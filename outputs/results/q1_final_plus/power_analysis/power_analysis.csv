@@ -1,0 +1,2 @@
+method_a,method_b,metric,n_sequences_observed,mean_delta,std_delta,paired_effect_size_dz,alpha,target_power,estimated_required_sequences,bootstrap_ci_low,bootstrap_ci_high,estimate_stable
+bytetrack:none,bytetrack:geometry_dynamic_no_multiagent,false_new_tracks,7,-291.2857142857143,137.76273599406852,-2.1144013450651546,0.05,0.8,2.0,1.0,4.0,no

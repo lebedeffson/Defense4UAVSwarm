@@ -1,0 +1,7 @@
+method,TP,FP,FN,precision,recall,F1,IDF1,false_new_tracks,false_new_tracks_per_100_frames,track_breaks,speed_bin,metric_scope
+bytetrack,39033,36503,59788,0.516746981571701,0.3949868954979205,0.4477365405461209,0.4477365405461209,6838,240.26704146170061,2722,slow,TP/FN by GT object speed; FP false-new are unmatched proxy candidates
+bytetrack,40015,36503,62386,0.522948848636922,0.3907676682844894,0.44729738037883066,0.44729738037883066,6838,240.26704146170061,2861,medium,TP/FN by GT object speed; FP false-new are unmatched proxy candidates
+bytetrack,39543,36503,55737,0.5199879020592799,0.41501889168765743,0.46161119736642425,0.46161119736642425,6838,240.26704146170061,2738,fast,TP/FN by GT object speed; FP false-new are unmatched proxy candidates
+geometry_dynamic_no_multiagent,37330,30652,61491,0.5491159424553558,0.3777537163153581,0.44759386821579944,0.44759386821579944,4799,168.6226282501757,2697,slow,TP/FN by GT object speed; FP false-new are unmatched proxy candidates
+geometry_dynamic_no_multiagent,38192,30652,64209,0.5547614897449306,0.3729651077626195,0.446050979590645,0.446050979590645,4799,168.6226282501757,2832,medium,TP/FN by GT object speed; FP false-new are unmatched proxy candidates
+geometry_dynamic_no_multiagent,37763,30652,57517,0.5519695973105313,0.39633711167086483,0.46138244906686215,0.46138244906686215,4799,168.6226282501757,2733,fast,TP/FN by GT object speed; FP false-new are unmatched proxy candidates
