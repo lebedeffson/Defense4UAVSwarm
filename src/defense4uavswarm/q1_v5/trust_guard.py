@@ -355,11 +355,7 @@ def _ensure_area_norm(det: pd.DataFrame) -> pd.DataFrame:
     if "bbox_area_norm" in d:
         return d
     if "image_width" not in d or "image_height" not in d:
-        # Feature-audit files generated before v5.4 did not store image
-        # dimensions. Use explicit known VisDrone frame dimensions as data
-        # columns, not filename parsing, and keep this visible in outputs.
-        d["image_width"] = 960
-        d["image_height"] = 540
+        raise ValueError("TrustGuard requires bbox_area_norm or explicit image_width/image_height; fallback dimensions are forbidden")
     d["bbox_area_norm"] = d["bbox_area"].astype(float) / (d["image_width"].astype(float) * d["image_height"].astype(float)).clip(lower=1)
     return d
 
@@ -383,4 +379,3 @@ def _event_row(row: Any, decision: CandidateDecision, explanation: DecisionExpla
         "geometric_support": decision.geometric_support,
         "eval_is_tp": bool(getattr(row, "eval_is_tp", False)),
     }
-

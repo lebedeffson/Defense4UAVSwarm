@@ -6,6 +6,8 @@ import pytest
 from defense4uavswarm.q1_v5.confidence_normalizer import RollingPercentileConfidence, normalize_absolute_confidence
 from defense4uavswarm.q1_v5.kinematic_consistency import KinematicTrackState
 from defense4uavswarm.q1_v5.trust_guard import TrustGuardConfig, run_trust_guard_dataframe
+from defense4uavswarm.q1_v5.candidate_state import CandidateState
+from defense4uavswarm.q1_v5.trust_guard import TrustGuard
 
 
 def test_absolute_confidence_floor_zeroes_below_floor():
@@ -45,6 +47,8 @@ def test_veto_frame_cannot_confirm():
             "x2": [10, 110, 10],
             "y2": [10, 110, 10],
             "bbox_area": [100, 100, 100],
+            "image_width": [100, 100, 100],
+            "image_height": [100, 100, 100],
             "image_path": ["", "", ""],
             "class_name": ["car", "car", "car"],
             "eval_is_tp": [True, True, True],
@@ -77,6 +81,8 @@ def test_operational_mode_does_not_accept_by_age_only():
             "x2": [10, 11, 12, 13],
             "y2": [10, 10, 10, 10],
             "bbox_area": [100, 100, 100, 100],
+            "image_width": [100, 100, 100, 100],
+            "image_height": [100, 100, 100, 100],
             "image_path": [""] * 4,
             "class_name": ["car"] * 4,
             "eval_is_tp": [True] * 4,
@@ -92,3 +98,49 @@ def test_operational_mode_does_not_accept_by_age_only():
     )
     events = run_trust_guard_dataframe(det, cfg)
     assert not events["accepted"].any()
+
+
+def test_trustguard_requires_dimensions_or_area_norm():
+    det = pd.DataFrame(
+        {
+            "sequence_id": ["s"],
+            "tracklet_id": ["t"],
+            "frame_id": [1],
+            "confidence": [0.9],
+            "x1": [0],
+            "y1": [0],
+            "x2": [10],
+            "y2": [10],
+            "bbox_area": [100],
+            "class_name": ["car"],
+        }
+    )
+    with pytest.raises(ValueError, match="image_width/image_height"):
+        run_trust_guard_dataframe(det, TrustGuardConfig())
+
+
+def test_leaky_decay_applied_once_for_frame_gap():
+    guard = TrustGuard(
+        TrustGuardConfig(
+            evidence_decay=0.5,
+            evidence_baseline=0.0,
+            absolute_confidence_floor=0.0,
+            relative_confidence_min_history=100,
+            use_relative_confidence=False,
+            use_kinematic=False,
+            use_veto=False,
+            confirmation_threshold=10.0,
+        )
+    )
+    state = CandidateState(first_frame_id=1, last_frame_id=1, evidence=1.0)
+    decision = guard.update_candidate(
+        state=state,
+        confidence=1.0,
+        relative_confidence=None,
+        kinematic=None,
+        geometric=None,
+        observed=True,
+        dt=3,
+    )
+    # decay^3 * 1.0 + q(1.0), not a separate pre-decay plus another decay.
+    assert decision.evidence == pytest.approx(1.125)

@@ -7,6 +7,7 @@ matching:
   class_matching: coarse_class
   ignored_policy: exclude_ignored
   confirmation_window_frames: 3
+  matcher_id: q1_v542_max_cardinality_iou_v1
 gate:
   maximum_pending_age_frames: 6
   max_track_gap: 1
