@@ -54,6 +54,8 @@ set -euo pipefail
 /home/lebedeffson/Code/venv/bin/python scripts/q1_v5/run_operating_curves.py --config configs/q1_v5/visdrone_bytetrack.yaml --output-dir outputs/results/q1_v5/operating_curves/bytetrack --overwrite
 /home/lebedeffson/Code/venv/bin/python scripts/q1_v5/run_matched_point_analysis.py --operating-points outputs/results/q1_v5/operating_curves/bytetrack/operating_points_raw.csv --trust-method legacy_geometry_dynamic_no_multiagent --trust-parameter 0 --output-dir outputs/results/q1_v5/matched_points/bytetrack
 /home/lebedeffson/Code/venv/bin/python scripts/q1_v5/run_statistical_analysis.py --by-sequence outputs/results/q1_v5/operating_curves/bytetrack/operating_points_by_sequence.csv --baseline-method tracker_baseline --method legacy_geometry_dynamic_no_multiagent --primary-metric false_new_tracks_per_100_frames --output-dir outputs/results/q1_v5/statistics/bytetrack
+/home/lebedeffson/Code/venv/bin/python scripts/q1_v5/run_trust_guard_ablation.py --config configs/q1_v5/trust_guard_v52.yaml --output-dir outputs/results/q1_v5/trust_guard_ablation/bytetrack
+/home/lebedeffson/Code/venv/bin/python scripts/q1_v5/run_confidence_shift_eval.py --config configs/q1_v5/trust_guard_v52.yaml --output-dir outputs/results/q1_v5/confidence_shift/bytetrack
 """
     (out / "commands.sh").write_text(commands, encoding="utf-8")
     (out / "commands.sh").chmod(0o755)
@@ -83,6 +85,9 @@ Important scope notes:
 - VisDrone is single-camera UAV validation, not real multi-UAV validation.
 - q1_v5 operating curves are candidate-space analyses from `feature_audit.csv`.
 - frozen v9 tracker-comparison numbers are kept separate in `legacy_freeze`.
+- TrustGuard v5.2 ablation and confidence-shift checks are candidate-space
+  diagnostics; use them for architecture selection/limitations, not as new
+  tracker-level VisDrone claims.
 """
 
 
@@ -92,6 +97,8 @@ def write_mapping(path: Path) -> None:
         ["Table B", "scripts/q1_v5/run_matched_point_analysis.py", "outputs/results/q1_v5/matched_points/bytetrack/matched_operating_points.csv", "configs/q1_v5/visdrone_bytetrack.yaml", "matched operating points"],
         ["Figure 1", "scripts/q1_v5/run_operating_curves.py", "outputs/results/q1_v5/operating_curves/bytetrack/operating_points_raw.csv", "configs/q1_v5/visdrone_bytetrack.yaml", "fig_f1_vs_false_new_bytetrack.png"],
         ["Stats", "scripts/q1_v5/run_statistical_analysis.py", "outputs/results/q1_v5/statistics/bytetrack/statistical_results.csv", "configs/q1_v5/visdrone_bytetrack.yaml", "statistical_summary.md"],
+        ["TrustGuard A0-A7", "scripts/q1_v5/run_trust_guard_ablation.py", "outputs/results/q1_v5/trust_guard_ablation/bytetrack/trust_guard_ablation_summary.csv", "configs/q1_v5/trust_guard_v52.yaml", "trust_guard_claim_safe.md"],
+        ["Confidence shift", "scripts/q1_v5/run_confidence_shift_eval.py", "outputs/results/q1_v5/confidence_shift/bytetrack/confidence_shift_summary.csv", "configs/q1_v5/trust_guard_v52.yaml", "confidence_shift_claim_safe.md"],
     ]
     with path.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)

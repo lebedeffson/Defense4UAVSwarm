@@ -9,3 +9,6 @@ Important scope notes:
 - VisDrone is single-camera UAV validation, not real multi-UAV validation.
 - q1_v5 operating curves are candidate-space analyses from `feature_audit.csv`.
 - frozen v9 tracker-comparison numbers are kept separate in `legacy_freeze`.
+- TrustGuard v5.2 ablation and confidence-shift checks are candidate-space
+  diagnostics; use them for architecture selection/limitations, not as new
+  tracker-level VisDrone claims.
