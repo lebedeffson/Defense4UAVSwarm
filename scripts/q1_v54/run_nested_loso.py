@@ -116,8 +116,9 @@ def main() -> None:
             outer_rows.append(row)
     outer = pd.DataFrame(outer_rows)
     selected_df = pd.DataFrame(selected_rows)
+    summary_group_cols = ["tracker", "method", "label_access", "selection_status"]
     summary = (
-        outer.groupby(["tracker", "method", "selection_status"], as_index=False)
+        outer.groupby(summary_group_cols, as_index=False)
         .agg(
             F1=("F1", "mean"),
             false_new_tracks_per_100_frames=("false_new_tracks_per_100_frames", "mean"),
