@@ -170,13 +170,27 @@ def evaluate_sequence(seq: str, det: pd.DataFrame, gt: pd.DataFrame, ignored: pd
         elif kind == "bayesian":
             gate = bayesian_terminal_gate_result(d, threshold=float(spec["threshold"]), cfg=gc)
         else:
-            rows.append({"sequence_id": seq, "tracker": "unknown", "method": spec["method"], "parameter_json": spec["parameter_json"], "selection_status": "unavailable", "F1": pd.NA})
+            rows.append(
+                {
+                    "sequence_id": seq,
+                    "tracker": cfg_tracker(d),
+                    "method": spec["method"],
+                    "parameter_json": spec["parameter_json"],
+                    "selection_status": "unavailable",
+                    "label_access": label_access(spec["method"]),
+                    "F1": pd.NA,
+                }
+            )
             continue
         result = evaluate_gate_result(d, gate, g, ig, fm, mc)
         row = dict(result.summary)
-        row.update({"sequence_id": seq, "tracker": d["detector"].iloc[0] if "detector" in d and not d.empty else "unknown", "method": spec["method"], "parameter_json": gate.parameter_json, "label_access": label_access(spec["method"])})
+        row.update({"sequence_id": seq, "tracker": cfg_tracker(d), "method": spec["method"], "parameter_json": gate.parameter_json, "label_access": label_access(spec["method"])})
         rows.append(row)
     return rows
+
+
+def cfg_tracker(d: pd.DataFrame) -> str:
+    return d["detector"].iloc[0] if "detector" in d and not d.empty else "unknown"
 
 
 def label_access(method: str) -> str:
