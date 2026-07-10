@@ -56,6 +56,9 @@ set -euo pipefail
 /home/lebedeffson/Code/venv/bin/python scripts/q1_v5/run_statistical_analysis.py --by-sequence outputs/results/q1_v5/operating_curves/bytetrack/operating_points_by_sequence.csv --baseline-method tracker_baseline --method legacy_geometry_dynamic_no_multiagent --primary-metric false_new_tracks_per_100_frames --output-dir outputs/results/q1_v5/statistics/bytetrack
 /home/lebedeffson/Code/venv/bin/python scripts/q1_v5/run_trust_guard_ablation.py --config configs/q1_v5/trust_guard_v52.yaml --output-dir outputs/results/q1_v5/trust_guard_ablation/bytetrack
 /home/lebedeffson/Code/venv/bin/python scripts/q1_v5/run_confidence_shift_eval.py --config configs/q1_v5/trust_guard_v52.yaml --output-dir outputs/results/q1_v5/confidence_shift/bytetrack
+/home/lebedeffson/Code/venv/bin/python scripts/q1_v5/run_baseline_dominance_audit.py --operating-points outputs/results/q1_v5/operating_curves/bytetrack/operating_points_raw.csv --output-dir outputs/results/q1_v5/baseline_dominance/bytetrack
+/home/lebedeffson/Code/venv/bin/python scripts/q1_v5/run_calibration_staleness.py --output-dir outputs/results/q1_v5/calibration_staleness
+/home/lebedeffson/Code/venv/bin/python scripts/q1_v5/build_methodology_closure_report.py --output-dir outputs/results/q1_v5/methodology_closure
 """
     (out / "commands.sh").write_text(commands, encoding="utf-8")
     (out / "commands.sh").chmod(0o755)
@@ -88,6 +91,8 @@ Important scope notes:
 - TrustGuard v5.2 ablation and confidence-shift checks are candidate-space
   diagnostics; use them for architecture selection/limitations, not as new
   tracker-level VisDrone claims.
+- Baseline-dominance and calibration-staleness reports are claim-boundary
+  checks: keep Bayesian/RF results even when they limit the trust-layer claim.
 """
 
 
@@ -99,6 +104,9 @@ def write_mapping(path: Path) -> None:
         ["Stats", "scripts/q1_v5/run_statistical_analysis.py", "outputs/results/q1_v5/statistics/bytetrack/statistical_results.csv", "configs/q1_v5/visdrone_bytetrack.yaml", "statistical_summary.md"],
         ["TrustGuard A0-A7", "scripts/q1_v5/run_trust_guard_ablation.py", "outputs/results/q1_v5/trust_guard_ablation/bytetrack/trust_guard_ablation_summary.csv", "configs/q1_v5/trust_guard_v52.yaml", "trust_guard_claim_safe.md"],
         ["Confidence shift", "scripts/q1_v5/run_confidence_shift_eval.py", "outputs/results/q1_v5/confidence_shift/bytetrack/confidence_shift_summary.csv", "configs/q1_v5/trust_guard_v52.yaml", "confidence_shift_claim_safe.md"],
+        ["Baseline dominance", "scripts/q1_v5/run_baseline_dominance_audit.py", "outputs/results/q1_v5/baseline_dominance/bytetrack/noninferiority_constrained_best.csv", "configs/q1_v5/visdrone_bytetrack.yaml", "baseline_dominance_claim_safe.md"],
+        ["Calibration staleness", "scripts/q1_v5/run_calibration_staleness.py", "outputs/results/q1_v5/calibration_staleness/calibration_staleness_summary.csv", "configs/q1_v5/visdrone_bytetrack.yaml", "calibration_staleness_claim_safe.md"],
+        ["Closure report", "scripts/q1_v5/build_methodology_closure_report.py", "outputs/results/q1_v5/methodology_closure/methodology_closure_report.md", "configs/q1_v5/visdrone_bytetrack.yaml", "methodology_closure_checklist.csv"],
     ]
     with path.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)

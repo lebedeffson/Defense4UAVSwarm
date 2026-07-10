@@ -12,3 +12,5 @@ Important scope notes:
 - TrustGuard v5.2 ablation and confidence-shift checks are candidate-space
   diagnostics; use them for architecture selection/limitations, not as new
   tracker-level VisDrone claims.
+- Baseline-dominance and calibration-staleness reports are claim-boundary
+  checks: keep Bayesian/RF results even when they limit the trust-layer claim.
