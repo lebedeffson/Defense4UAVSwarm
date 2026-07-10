@@ -24,6 +24,7 @@ def main() -> None:
     selections = []
     folds_payload = []
     summaries = []
+    budgets = []
     for item in args.inputs:
         root = Path(item)
         if not root.exists():
@@ -34,6 +35,8 @@ def main() -> None:
             selections.append(pd.read_csv(root / "inner_selection_results.csv"))
         if (root / "outer_test_summary.csv").exists():
             summaries.append(pd.read_csv(root / "outer_test_summary.csv"))
+        if (root / "quarantine_budget_by_sequence.csv").exists():
+            budgets.append(pd.read_csv(root / "quarantine_budget_by_sequence.csv"))
         if (root / "outer_folds.json").exists():
             folds_payload.extend(json.loads((root / "outer_folds.json").read_text(encoding="utf-8")))
     if frames:
@@ -43,6 +46,8 @@ def main() -> None:
         (out / "selected_configs_by_fold.json").write_text(json.dumps(pd.concat(selections, ignore_index=True).to_dict(orient="records"), indent=2), encoding="utf-8")
     if summaries:
         pd.concat(summaries, ignore_index=True).to_csv(out / "outer_test_summary.csv", index=False)
+    if budgets:
+        pd.concat(budgets, ignore_index=True).to_csv(out / "quarantine_budget_by_sequence.csv", index=False)
     (out / "outer_folds.json").write_text(json.dumps(folds_payload, indent=2), encoding="utf-8")
     print(f"status=ok output={out} rows={sum(len(x) for x in frames) if frames else 0}")
 
