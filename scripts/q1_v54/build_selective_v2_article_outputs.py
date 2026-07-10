@@ -99,9 +99,11 @@ def aggregate_method_metrics(by_sequence: pd.DataFrame, prefix: str) -> list[dic
         for metric in metrics:
             col = prefix + metric
             if col in group.columns:
-                item[metric] = float(group[col].mean())
+                value = group[col].mean()
+                item[metric] = None if pd.isna(value) else float(value)
             elif not prefix and metric in group.columns:
-                item[metric] = float(group[metric].mean())
+                value = group[metric].mean()
+                item[metric] = None if pd.isna(value) else float(value)
         rows.append(item)
     return rows
 
