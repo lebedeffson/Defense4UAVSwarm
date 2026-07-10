@@ -31,15 +31,17 @@ def main() -> None:
         "git_commit": git(["rev-parse", "HEAD"]),
         "branch": git(["branch", "--show-current"]),
         "method": "selective_trust_quarantine_v2",
-        "online_metrics": extract_method_metrics(loso, prefix="online_current_frame_"),
-        "backfilled_map_metrics": extract_method_metrics(loso, prefix=""),
+        "online_metrics": aggregate_method_metrics(by_sequence, prefix="online_current_frame_"),
+        "backfilled_map_metrics": aggregate_method_metrics(by_sequence, prefix=""),
         "outer_loso": records(loso),
+        "outer_loso_by_sequence": records(by_sequence),
         "normalized_statistics": records(stats),
         "budget_audit": records(budget),
         "claim_status": claim_status(stats),
     }
     (out / "article_numbers_selective_v2.json").write_text(json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8")
     (out / "table_selective_v2_outer_loso.csv").write_text(loso.to_csv(index=False), encoding="utf-8")
+    (out / "table_selective_v2_outer_loso_by_sequence.csv").write_text(by_sequence.to_csv(index=False), encoding="utf-8")
     (out / "table_selective_v2_statistics.csv").write_text(stats.to_csv(index=False), encoding="utf-8")
     (out / "table_selective_v2_budget_audit.csv").write_text(budget.to_csv(index=False), encoding="utf-8")
     (out / "article_patch_selective_v2.md").write_text(article_patch(payload, by_sequence), encoding="utf-8")
@@ -70,6 +72,36 @@ def extract_method_metrics(loso: pd.DataFrame, prefix: str) -> list[dict[str, An
                 item[metric] = getattr(row, col)
             elif not prefix and metric in loso.columns:
                 item[metric] = getattr(row, metric)
+        rows.append(item)
+    return rows
+
+
+def aggregate_method_metrics(by_sequence: pd.DataFrame, prefix: str) -> list[dict[str, Any]]:
+    if by_sequence.empty:
+        return []
+    metrics = [
+        "TP",
+        "FP",
+        "FN",
+        "precision",
+        "recall",
+        "F1",
+        "observed_false_track_occupancy_per_100_frames",
+        "observed_false_track_occupancy_rows",
+        "false_new_tracks",
+        "false_new_tracks_per_100_frames",
+        "track_initiation_precision",
+    ]
+    rows: list[dict[str, Any]] = []
+    data = by_sequence[by_sequence["method"].isin(["tracker_baseline", "selective_trust_quarantine"])]
+    for (tracker, method), group in data.groupby(["tracker", "method"], sort=False):
+        item: dict[str, Any] = {"tracker": tracker, "method": method, "n_sequences": int(len(group))}
+        for metric in metrics:
+            col = prefix + metric
+            if col in group.columns:
+                item[metric] = float(group[col].mean())
+            elif not prefix and metric in group.columns:
+                item[metric] = float(group[metric].mean())
         rows.append(item)
     return rows
 
