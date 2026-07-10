@@ -59,15 +59,20 @@ def main() -> None:
     sequences = sorted(det["sequence_id"].unique())
     configs = candidate_gates(cfg)
     all_seq_metrics = []
+    tracker_name = str(cfg.get("tracker", "unknown"))
     for seq in sequences:
-        all_seq_metrics.extend(evaluate_sequence(seq, det, gt, ignored, manifest, mc, gc, configs))
+        all_seq_metrics.extend(evaluate_sequence(seq, det, gt, ignored, manifest, mc, gc, configs, tracker_name))
     seq_metrics = pd.DataFrame(all_seq_metrics)
     folds = []
     selected_rows = []
     outer_rows = []
+    selection_cfg = cfg.get("selection", {})
+    max_f1_loss = float(selection_cfg.get("robust_inner_max_f1_loss", 0.01))
+    mean_f1_loss = float(selection_cfg.get("robust_inner_mean_f1_loss", 0.005))
+    max_confirm_loss = float(selection_cfg.get("robust_inner_max_confirm_loss", 0.01))
     for fold_idx, test_seq in enumerate(sequences):
         train_seqs = [s for s in sequences if s != test_seq]
-        folds.append({"outer_fold": fold_idx, "outer_test_sequence": test_seq, "outer_train_sequences": train_seqs})
+        folds.append({"outer_fold": fold_idx, "tracker": tracker_name, "outer_test_sequence": test_seq, "outer_train_sequences": train_seqs})
         base_train = seq_metrics[seq_metrics["sequence_id"].isin(train_seqs) & seq_metrics["method"].eq("tracker_baseline")]
         base_f1 = float(base_train["F1"].mean())
         for method in sorted(seq_metrics["method"].unique()):
@@ -76,20 +81,37 @@ def main() -> None:
                 selected = method_train.iloc[0].copy()
                 status = "fixed_baseline"
             else:
-                grouped = (
-                    method_train.groupby(["method", "parameter_json"], as_index=False)
-                    .agg(
-                        inner_mean_F1=("F1", "mean"),
-                        inner_mean_occupancy=("observed_false_track_occupancy_rows", "mean"),
-                        inner_mean_true_track_confirmation_rate=("true_track_confirmation_rate", "mean"),
-                        inner_mean_delay=("median_confirmation_delay_from_gt", "mean"),
+                grouped = _group_inner_candidates(method_train, base_train)
+                if grouped.empty:
+                    selected_rows.append(
+                        {
+                            "outer_fold": fold_idx,
+                            "outer_test_sequence": test_seq,
+                            "method": method,
+                            "selection_status": "unavailable",
+                            "selected_parameter_json": "",
+                            "inner_mean_F1": float("nan"),
+                            "inner_mean_occupancy": float("nan"),
+                            "inner_mean_occupancy_per_100_frames": float("nan"),
+                            "inner_min_F1_delta": float("nan"),
+                            "inner_mean_F1_delta": float("nan"),
+                            "inner_min_confirm_delta": float("nan"),
+                        }
                     )
-                    .sort_values(["inner_mean_occupancy", "inner_mean_delay", "parameter_json"], ascending=[True, True, True])
-                )
-                feasible = grouped[grouped["inner_mean_F1"] >= base_f1 - 0.01].copy()
+                    continue
+                feasible = grouped[
+                    (grouped["inner_min_F1_delta"] >= -max_f1_loss)
+                    & (grouped["inner_mean_F1_delta"] >= -mean_f1_loss)
+                    & (grouped["inner_min_confirm_delta"] >= -max_confirm_loss)
+                ].copy()
                 if feasible.empty:
-                    selected = grouped.iloc[0].copy()
-                    status = "infeasible_noninferiority"
+                    passthrough = grouped[grouped["parameter_json"].astype(str).str.contains('"quarantine_fraction_max":0.0', regex=False)].copy()
+                    if not passthrough.empty:
+                        selected = passthrough.iloc[0].copy()
+                        status = "baseline_passthrough_no_safe_active_profile"
+                    else:
+                        selected = grouped.iloc[0].copy()
+                        status = "infeasible_noninferiority"
                 else:
                     selected = feasible.iloc[0].copy()
                     status = "selected_feasible"
@@ -103,6 +125,10 @@ def main() -> None:
                     "selected_parameter_json": parameter_json,
                     "inner_mean_F1": float(selected.get("inner_mean_F1", base_f1)),
                     "inner_mean_occupancy": float(selected.get("inner_mean_occupancy", 0.0)),
+                    "inner_mean_occupancy_per_100_frames": float(selected.get("inner_mean_occupancy_per_100_frames", 0.0)),
+                    "inner_min_F1_delta": float(selected.get("inner_min_F1_delta", 0.0)),
+                    "inner_mean_F1_delta": float(selected.get("inner_mean_F1_delta", 0.0)),
+                    "inner_min_confirm_delta": float(selected.get("inner_min_confirm_delta", 0.0)),
                 }
             )
             test_hit = seq_metrics[
@@ -135,8 +161,62 @@ def main() -> None:
     Path(out / "selected_configs_by_fold.json").write_text(json.dumps(selected_rows, indent=2), encoding="utf-8")
     outer.to_csv(out / "outer_test_by_sequence.csv", index=False)
     summary.to_csv(out / "outer_test_summary.csv", index=False)
-    (out / "run_metadata.json").write_text(json.dumps({"status": "success", "git_commit": git(["rev-parse", "HEAD"]), "branch": git(["branch", "--show-current"]), "tracker": cfg.get("tracker", "unknown")}, indent=2), encoding="utf-8")
+    (out / "run_metadata.json").write_text(json.dumps({"status": "success", "git_commit": git(["rev-parse", "HEAD"]), "branch": git(["branch", "--show-current"]), "tracker": tracker_name}, indent=2), encoding="utf-8")
     print(f"status=ok output={out} folds={len(folds)} rows={len(outer)}")
+
+
+def _group_inner_candidates(method_train: pd.DataFrame, base_train: pd.DataFrame) -> pd.DataFrame:
+    if method_train.empty:
+        return pd.DataFrame()
+    method_train = method_train.dropna(subset=["F1", "observed_false_track_occupancy_rows"]).copy()
+    if method_train.empty:
+        return pd.DataFrame(
+            columns=[
+                "method",
+                "parameter_json",
+                "inner_mean_F1",
+                "inner_mean_occupancy",
+                "inner_mean_occupancy_per_100_frames",
+                "inner_mean_true_track_confirmation_rate",
+                "inner_mean_delay",
+                "inner_min_F1_delta",
+                "inner_mean_F1_delta",
+                "inner_min_confirm_delta",
+            ]
+        )
+    base = base_train[
+        [
+            "sequence_id",
+            "F1",
+            "true_track_confirmation_rate",
+            "num_eval_frames",
+        ]
+    ].rename(
+        columns={
+            "F1": "baseline_F1",
+            "true_track_confirmation_rate": "baseline_true_track_confirmation_rate",
+            "num_eval_frames": "baseline_num_eval_frames",
+        }
+    )
+    joined = method_train.merge(base, on="sequence_id", how="left")
+    joined["F1_delta"] = joined["F1"].astype(float) - joined["baseline_F1"].astype(float)
+    joined["confirm_delta"] = joined["true_track_confirmation_rate"].astype(float) - joined["baseline_true_track_confirmation_rate"].astype(float)
+    frames = joined["num_eval_frames"].astype(float).where(joined["num_eval_frames"].astype(float).gt(0), joined["baseline_num_eval_frames"].astype(float))
+    joined["occupancy_per_100_frames"] = joined["observed_false_track_occupancy_rows"].astype(float) / frames.clip(lower=1) * 100.0
+    return (
+        joined.groupby(["method", "parameter_json"], as_index=False)
+        .agg(
+            inner_mean_F1=("F1", "mean"),
+            inner_mean_occupancy=("observed_false_track_occupancy_rows", "mean"),
+            inner_mean_occupancy_per_100_frames=("occupancy_per_100_frames", "mean"),
+            inner_mean_true_track_confirmation_rate=("true_track_confirmation_rate", "mean"),
+            inner_mean_delay=("median_confirmation_delay_from_gt", "mean"),
+            inner_min_F1_delta=("F1_delta", "min"),
+            inner_mean_F1_delta=("F1_delta", "mean"),
+            inner_min_confirm_delta=("confirm_delta", "min"),
+        )
+        .sort_values(["inner_mean_occupancy_per_100_frames", "inner_mean_delay", "parameter_json"], ascending=[True, True, True])
+    )
 
 
 def candidate_gates(cfg: dict[str, Any]) -> list[dict[str, Any]]:
@@ -156,7 +236,7 @@ def candidate_gates(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def evaluate_sequence(seq: str, det: pd.DataFrame, gt: pd.DataFrame, ignored: pd.DataFrame, manifest: pd.DataFrame, mc: MatchingConfig, gc: GateConfig, configs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def evaluate_sequence(seq: str, det: pd.DataFrame, gt: pd.DataFrame, ignored: pd.DataFrame, manifest: pd.DataFrame, mc: MatchingConfig, gc: GateConfig, configs: list[dict[str, Any]], tracker_name: str) -> list[dict[str, Any]]:
     d = det[det["sequence_id"].eq(seq)].copy()
     g = gt[gt["sequence_id"].eq(seq)].copy()
     ig = ignored[ignored["sequence_id"].eq(seq)].copy() if not ignored.empty else ignored
@@ -180,7 +260,7 @@ def evaluate_sequence(seq: str, det: pd.DataFrame, gt: pd.DataFrame, ignored: pd
             rows.append(
                 {
                     "sequence_id": seq,
-                    "tracker": cfg_tracker(d),
+                    "tracker": tracker_name,
                     "method": spec["method"],
                     "parameter_json": spec["parameter_json"],
                     "selection_status": "unavailable",
@@ -191,13 +271,9 @@ def evaluate_sequence(seq: str, det: pd.DataFrame, gt: pd.DataFrame, ignored: pd
             continue
         result = evaluate_gate_result(d, gate, g, ig, fm, mc)
         row = dict(result.summary)
-        row.update({"sequence_id": seq, "tracker": cfg_tracker(d), "method": spec["method"], "parameter_json": gate.parameter_json, "label_access": label_access(spec["method"])})
+        row.update({"sequence_id": seq, "tracker": tracker_name, "method": spec["method"], "parameter_json": gate.parameter_json, "label_access": label_access(spec["method"])})
         rows.append(row)
     return rows
-
-
-def cfg_tracker(d: pd.DataFrame) -> str:
-    return d["detector"].iloc[0] if "detector" in d and not d.empty else "unknown"
 
 
 def label_access(method: str) -> str:

@@ -11,6 +11,10 @@ matching:
 gate:
   maximum_pending_age_frames: 6
   max_track_gap: 1
+selection:
+  robust_inner_max_f1_loss: 0.01
+  robust_inner_mean_f1_loss: 0.005
+  robust_inner_max_confirm_loss: 0.01
 grids:
   confidence_threshold: [0.1, 0.2, 0.3, 0.4, 0.5]
   m_of_n:
@@ -21,6 +25,29 @@ grids:
   bayesian_threshold: [0.7, 1.1, 1.5, 2.0]
   selective_quarantine:
     - tracker_profile: ocsort
+      episode_start_history_only: true
+      hard_budget_enabled: true
+      budget_capacity: 2.0
+      timeout_policy: release_to_baseline
+      reject_requires_hard_veto: true
+      critical_confidence_floor: 0.02
+      confidence_floor: 0.05
+      relative_weight: 0.4
+      quarantine_fraction_min: 0.00
+      quarantine_fraction_max: 0.00
+      fast_pass_support: 0.65
+      evidence_decay: 0.75
+      missing_frame_penalty: 0.15
+      confirmation_support: 0.50
+      maximum_quarantine_frames: 1
+      buffer_backfill: true
+    - tracker_profile: ocsort
+      episode_start_history_only: true
+      hard_budget_enabled: true
+      budget_capacity: 2.0
+      timeout_policy: release_to_baseline
+      reject_requires_hard_veto: true
+      critical_confidence_floor: 0.02
       confidence_floor: 0.05
       relative_weight: 0.4
       quarantine_fraction_min: 0.00
@@ -32,6 +59,12 @@ grids:
       maximum_quarantine_frames: 1
       buffer_backfill: true
     - tracker_profile: ocsort
+      episode_start_history_only: true
+      hard_budget_enabled: true
+      budget_capacity: 2.0
+      timeout_policy: release_to_baseline
+      reject_requires_hard_veto: true
+      critical_confidence_floor: 0.02
       confidence_floor: 0.05
       relative_weight: 0.4
       quarantine_fraction_min: 0.00
@@ -41,15 +74,4 @@ grids:
       missing_frame_penalty: 0.15
       confirmation_support: 0.65
       maximum_quarantine_frames: 1
-      buffer_backfill: true
-    - tracker_profile: ocsort
-      confidence_floor: 0.05
-      relative_weight: 0.6
-      quarantine_fraction_min: 0.00
-      quarantine_fraction_max: 0.10
-      fast_pass_support: 0.85
-      evidence_decay: 0.90
-      missing_frame_penalty: 0.15
-      confirmation_support: 0.75
-      maximum_quarantine_frames: 2
       buffer_backfill: true
