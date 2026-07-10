@@ -51,3 +51,13 @@ class RollingPercentileConfidence:
         score = self.percentile_rank(confidence, key)
         self.update(confidence, key)
         return score
+
+    def score_batch(self, confidences: list[float], keys: list[Hashable]) -> list[float | None]:
+        return [self.percentile_rank(c, k) for c, k in zip(confidences, keys)]
+
+    def update_batch(self, confidences: list[float], keys: list[Hashable]) -> None:
+        for confidence, key in zip(confidences, keys):
+            self.update(confidence, key)
+
+    def reset(self) -> None:
+        self.history.clear()

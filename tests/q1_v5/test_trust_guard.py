@@ -24,9 +24,9 @@ def test_relative_confidence_is_past_only():
 
 def test_kinematics_unavailable_for_first_two_observations():
     k = KinematicTrackState()
-    assert k.score((0, 0, 10, 10)) == (1.0, False)
+    assert k.score((0, 0, 10, 10)) == (None, False)
     k.update((0, 0, 10, 10))
-    assert k.score((1, 0, 11, 10)) == (1.0, False)
+    assert k.score((1, 0, 11, 10)) == (None, False)
     k.update((1, 0, 11, 10))
     score, available = k.score((2, 0, 12, 10))
     assert available
@@ -53,7 +53,7 @@ def test_veto_frame_cannot_confirm():
     cfg = TrustGuardConfig(
         relative_confidence_min_history=100,
         confirmation_threshold=0.70,
-        minimum_valid_hits=2,
+        minimum_valid_hits=3,
         kinematic_veto_threshold=0.99,
         veto_penalty=0.35,
         use_kinematic=True,

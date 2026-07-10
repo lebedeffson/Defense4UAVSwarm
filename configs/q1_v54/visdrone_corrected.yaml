@@ -1,0 +1,20 @@
+dataset_root: data/visdrone/VisDrone2019-VID-val
+feature_audit: outputs/results/q1_final_corrected/yolov8s_main/feature_audit.csv
+detector: yolov8s
+tracker: bytetrack
+matching:
+  iou_threshold: 0.5
+  class_matching: coarse_class
+  ignored_policy: exclude_ignored
+  confirmation_window_frames: 3
+gate:
+  maximum_pending_age_frames: 6
+  max_track_gap: 1
+grids:
+  confidence_threshold: [0.10, 0.20, 0.30, 0.40, 0.50]
+  m_of_n:
+    - {M: 2, N: 3, confidence_threshold: 0.10}
+    - {M: 3, N: 5, confidence_threshold: 0.10}
+    - {M: 2, N: 3, confidence_threshold: 0.20}
+    - {M: 3, N: 5, confidence_threshold: 0.20}
+  bayesian_threshold: [0.70, 1.10, 1.50, 2.00]
