@@ -23,6 +23,7 @@ from defense4uavswarm.q1_v5.initiation_gate import (
     split_duplicate_observation_tracklets,
     tracker_baseline_gate_result,
 )
+from defense4uavswarm.q1_v5.selective_quarantine import SelectiveTrustQuarantineConfig, selective_quarantine_gate_result
 from defense4uavswarm.q1_visdrone import Q1Params, load_gt_protocol, method_acceptance
 from defense4uavswarm.v8_sim import vector_iou
 
@@ -178,6 +179,9 @@ def main() -> None:
         rows.append(run_method(gate, det, gt, ignored, frame_index, mc, f"M={spec['M']};N={spec['N']};conf", spec["confidence_threshold"]))
     for th in cfg.get("grids", {}).get("bayesian_threshold", [1.1]):
         rows.append(run_method(bayesian_terminal_gate_result(det, threshold=float(th), cfg=gc), det, gt, ignored, frame_index, mc, "threshold", th))
+    for spec in cfg.get("grids", {}).get("selective_quarantine", []):
+        qcfg = SelectiveTrustQuarantineConfig.from_mapping(spec)
+        rows.append(run_method(selective_quarantine_gate_result(det, qcfg), det, gt, ignored, frame_index, mc, "selective_quarantine", json.dumps(qcfg.to_parameters(), sort_keys=True)))
     result = pd.DataFrame(rows)
     result.to_csv(out / "corrected_operating_points.csv", index=False)
     frame_manifest.to_csv(out / "frame_manifest.csv", index=False)

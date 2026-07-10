@@ -26,6 +26,7 @@ from defense4uavswarm.q1_v5.initiation_gate import (
     split_duplicate_observation_tracklets,
     tracker_baseline_gate_result,
 )
+from defense4uavswarm.q1_v5.selective_quarantine import SelectiveTrustQuarantineConfig, selective_quarantine_gate_result
 from defense4uavswarm.q1_visdrone import Q1Params, load_gt_protocol, method_acceptance
 from scripts.q1_v54.run_corrected_operating_curves import load_candidates, matching_config, gate_config
 
@@ -148,6 +149,9 @@ def candidate_gates(cfg: dict[str, Any]) -> list[dict[str, Any]]:
         rows.append({"method": "m_of_n_confirmation", "parameter_json": json.dumps({"M": int(spec["M"]), "N": int(spec["N"]), "confidence_threshold": float(spec["confidence_threshold"])}, sort_keys=True, separators=(",", ":")), "kind": "mofn", **spec})
     for th in grids.get("bayesian_threshold", [1.1]):
         rows.append({"method": "bayesian_fixed_terminal", "parameter_json": json.dumps({"high_update": 0.9, "mid_update": 0.35, "negative_update": -0.25, "threshold": float(th)}, sort_keys=True, separators=(",", ":")), "kind": "bayesian", "threshold": float(th)})
+    for spec in grids.get("selective_quarantine", []):
+        qcfg = SelectiveTrustQuarantineConfig.from_mapping(spec)
+        rows.append({"method": "selective_trust_quarantine", "parameter_json": json.dumps(qcfg.to_parameters(), sort_keys=True, separators=(",", ":")), "kind": "selective_quarantine", "config": qcfg.to_parameters()})
     rows.append({"method": "rf_terminal_gate", "parameter_json": '{"status":"not_implemented_in_v542a"}', "kind": "unavailable"})
     return rows
 
@@ -170,6 +174,8 @@ def evaluate_sequence(seq: str, det: pd.DataFrame, gt: pd.DataFrame, ignored: pd
             gate = m_of_n_confirmation_result(d, int(spec["M"]), int(spec["N"]), float(spec["confidence_threshold"]), gc)
         elif kind == "bayesian":
             gate = bayesian_terminal_gate_result(d, threshold=float(spec["threshold"]), cfg=gc)
+        elif kind == "selective_quarantine":
+            gate = selective_quarantine_gate_result(d, SelectiveTrustQuarantineConfig.from_mapping(spec.get("config")))
         else:
             rows.append(
                 {

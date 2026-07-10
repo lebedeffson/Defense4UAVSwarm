@@ -19,3 +19,37 @@ grids:
     - {M: 2, N: 3, confidence_threshold: 0.2}
     - {M: 3, N: 5, confidence_threshold: 0.2}
   bayesian_threshold: [0.7, 1.1, 1.5, 2.0]
+  selective_quarantine:
+    - tracker_profile: ocsort
+      confidence_floor: 0.05
+      relative_weight: 0.4
+      quarantine_fraction_min: 0.00
+      quarantine_fraction_max: 0.02
+      fast_pass_support: 0.65
+      evidence_decay: 0.75
+      missing_frame_penalty: 0.15
+      confirmation_support: 0.50
+      maximum_quarantine_frames: 1
+      buffer_backfill: true
+    - tracker_profile: ocsort
+      confidence_floor: 0.05
+      relative_weight: 0.4
+      quarantine_fraction_min: 0.00
+      quarantine_fraction_max: 0.05
+      fast_pass_support: 0.80
+      evidence_decay: 0.75
+      missing_frame_penalty: 0.15
+      confirmation_support: 0.65
+      maximum_quarantine_frames: 1
+      buffer_backfill: true
+    - tracker_profile: ocsort
+      confidence_floor: 0.05
+      relative_weight: 0.6
+      quarantine_fraction_min: 0.00
+      quarantine_fraction_max: 0.10
+      fast_pass_support: 0.85
+      evidence_decay: 0.90
+      missing_frame_penalty: 0.15
+      confirmation_support: 0.75
+      maximum_quarantine_frames: 2
+      buffer_backfill: true
