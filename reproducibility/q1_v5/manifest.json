@@ -1,0 +1,21 @@
+{
+  "git_commit": "2544d9b540d0acc679c0949eeef54527ec0e0690",
+  "python_version": "3.14.6",
+  "platform": "Linux-7.0.14-arch1-1-x86_64-with-glibc2.43",
+  "created_at": "2026-07-10T11:44:06.732903+00:00",
+  "dataset": "VisDrone2019-VID-val",
+  "trackers": [
+    "ByteTrack-like",
+    "OC-SORT frozen v9"
+  ],
+  "detectors": [
+    "YOLOv8s",
+    "YOLOv8n"
+  ],
+  "primary_metric": "false_new_tracks_per_100_frames",
+  "noninferiority_margins": [
+    0.005,
+    0.01,
+    0.015
+  ]
+}

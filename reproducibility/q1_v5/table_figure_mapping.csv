@@ -1,0 +1,5 @@
+paper_item,source_script,source_csv,config,output_file
+Table A,scripts/q1_v5/freeze_legacy_baseline.py,outputs/results/q1_v5/legacy_freeze/legacy_baseline_freeze.csv,n/a,legacy tracker freeze
+Table B,scripts/q1_v5/run_matched_point_analysis.py,outputs/results/q1_v5/matched_points/bytetrack/matched_operating_points.csv,configs/q1_v5/visdrone_bytetrack.yaml,matched operating points
+Figure 1,scripts/q1_v5/run_operating_curves.py,outputs/results/q1_v5/operating_curves/bytetrack/operating_points_raw.csv,configs/q1_v5/visdrone_bytetrack.yaml,fig_f1_vs_false_new_bytetrack.png
+Stats,scripts/q1_v5/run_statistical_analysis.py,outputs/results/q1_v5/statistics/bytetrack/statistical_results.csv,configs/q1_v5/visdrone_bytetrack.yaml,statistical_summary.md
