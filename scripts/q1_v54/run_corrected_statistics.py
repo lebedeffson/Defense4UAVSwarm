@@ -35,7 +35,10 @@ def main() -> None:
     samples_payload: dict[str, np.ndarray] = {}
     rng = np.random.default_rng(args.seed)
     for tracker, group in df.groupby("tracker", sort=False):
-        base = group[group["method"].eq("tracker_baseline")][["outer_test_sequence", "F1", "observed_false_track_occupancy_rows", "false_new_tracks_per_100_frames"]]
+        occupancy_col = "observed_false_track_occupancy_per_100_frames"
+        if occupancy_col not in group.columns:
+            occupancy_col = "observed_false_track_occupancy_rows"
+        base = group[group["method"].eq("tracker_baseline")][["outer_test_sequence", "F1", occupancy_col, "false_new_tracks_per_100_frames"]]
         for method, mg in group.groupby("method", sort=False):
             if method == "tracker_baseline":
                 continue
@@ -43,7 +46,7 @@ def main() -> None:
             if paired.empty:
                 continue
             f1_delta = paired["F1_method"].astype(float).to_numpy() - paired["F1_baseline"].astype(float).to_numpy()
-            occ_delta = paired["observed_false_track_occupancy_rows_method"].astype(float).to_numpy() - paired["observed_false_track_occupancy_rows_baseline"].astype(float).to_numpy()
+            occ_delta = paired[f"{occupancy_col}_method"].astype(float).to_numpy() - paired[f"{occupancy_col}_baseline"].astype(float).to_numpy()
             f1_samples = paired_bootstrap_mean(f1_delta, args.n_resamples, rng)
             occ_samples = paired_bootstrap_mean(occ_delta, args.n_resamples, rng)
             f1_ci = ci95(f1_samples)
@@ -74,6 +77,7 @@ def main() -> None:
                     "tracker": tracker,
                     "method": method,
                     "hypothesis": "H2_occupancy_superiority",
+                    "metric": occupancy_col,
                     "tested_after_h1": h2_tested,
                     "n_sequences": len(occ_delta),
                     "mean_delta": float(occ_delta.mean()),
@@ -85,7 +89,16 @@ def main() -> None:
                 }
             )
             for row in paired.itertuples(index=False):
-                deltas.append({"tracker": tracker, "method": method, "outer_test_sequence": row.outer_test_sequence, "delta_F1": getattr(row, "F1_method") - getattr(row, "F1_baseline"), "delta_occupancy": getattr(row, "observed_false_track_occupancy_rows_method") - getattr(row, "observed_false_track_occupancy_rows_baseline")})
+                deltas.append(
+                    {
+                        "tracker": tracker,
+                        "method": method,
+                        "outer_test_sequence": row.outer_test_sequence,
+                        "delta_F1": getattr(row, "F1_method") - getattr(row, "F1_baseline"),
+                        "delta_occupancy": getattr(row, f"{occupancy_col}_method") - getattr(row, f"{occupancy_col}_baseline"),
+                        "occupancy_metric": occupancy_col,
+                    }
+                )
     pd.DataFrame(rows).to_csv(out / "statistical_results.csv", index=False)
     pd.DataFrame(deltas).to_csv(out / "paired_sequence_deltas.csv", index=False)
     np.savez(out / "bootstrap_samples.npz", **samples_payload)

@@ -161,8 +161,50 @@ def main() -> None:
     Path(out / "selected_configs_by_fold.json").write_text(json.dumps(selected_rows, indent=2), encoding="utf-8")
     outer.to_csv(out / "outer_test_by_sequence.csv", index=False)
     summary.to_csv(out / "outer_test_summary.csv", index=False)
+    write_quarantine_budget_audit(outer, out / "quarantine_budget_by_sequence.csv")
     (out / "run_metadata.json").write_text(json.dumps({"status": "success", "git_commit": git(["rev-parse", "HEAD"]), "branch": git(["branch", "--show-current"]), "tracker": tracker_name}, indent=2), encoding="utf-8")
     print(f"status=ok output={out} folds={len(folds)} rows={len(outer)}")
+
+
+def write_quarantine_budget_audit(outer: pd.DataFrame, path: Path) -> None:
+    cols = [
+        "tracker",
+        "outer_fold",
+        "sequence_id",
+        "episode_starts",
+        "quarantined_starts",
+        "configured_fraction",
+        "realized_fraction",
+        "timeout_releases",
+        "hard_veto_rejections",
+        "budget_invariant_pass",
+    ]
+    if outer.empty or "method" not in outer:
+        pd.DataFrame(columns=cols).to_csv(path, index=False)
+        return
+    rows = []
+    data = outer[outer["method"].eq("selective_trust_quarantine")].copy()
+    for row in data.itertuples(index=False):
+        starts = int(getattr(row, "episode_starts", 0) or 0)
+        quarantined = int(getattr(row, "quarantined_starts", 0) or 0)
+        configured = float(getattr(row, "configured_quarantine_fraction", 0.0) or 0.0)
+        realized = float(getattr(row, "realized_quarantine_fraction", quarantined / max(1, starts)) or 0.0)
+        tolerance = 1.0 / max(1, starts)
+        rows.append(
+            {
+                "tracker": getattr(row, "tracker", ""),
+                "outer_fold": int(getattr(row, "outer_fold", -1)),
+                "sequence_id": getattr(row, "sequence_id", ""),
+                "episode_starts": starts,
+                "quarantined_starts": quarantined,
+                "configured_fraction": configured,
+                "realized_fraction": realized,
+                "timeout_releases": int(getattr(row, "timeout_releases", 0) or 0),
+                "hard_veto_rejections": int(getattr(row, "hard_veto_rejections", 0) or 0),
+                "budget_invariant_pass": bool(realized <= configured + tolerance),
+            }
+        )
+    pd.DataFrame(rows, columns=cols).to_csv(path, index=False)
 
 
 def _group_inner_candidates(method_train: pd.DataFrame, base_train: pd.DataFrame) -> pd.DataFrame:

@@ -80,6 +80,7 @@ class QuarantineState:
     timeout_release_count: int = 0
     hard_veto_rejection_count: int = 0
     terminal_reason: str = ""
+    was_quarantined: bool = False
 
 
 @dataclass(frozen=True)
@@ -296,6 +297,7 @@ class SelectiveTrustQuarantine:
                 budget_tokens_after=float(budget_tokens_after),
                 episode_start_rank=episode_start_rank,
                 terminal_reason="quarantine_low_support",
+                was_quarantined=True,
             )
             state.accumulated_hazard = _support_to_hazard(support, self.cfg.epsilon)
             self.states[key] = state
@@ -380,6 +382,7 @@ def selective_quarantine_gate_result(
     assert_unique_episode_observations(candidates)
     data = _ensure_area_norm(candidates)
     accepted = pd.Series(False, index=data.index)
+    online_accepted = pd.Series(False, index=data.index)
     layers: dict[str, SelectiveTrustQuarantine] = {}
     records: dict[tuple[str, str, int], GateEpisodeRecord] = {}
     stats_by_seq: dict[str, SequenceAdaptiveStats] = {}
@@ -431,6 +434,7 @@ def selective_quarantine_gate_result(
                 )
                 if decision.publish_current:
                     accepted.loc[row.Index] = True
+                    online_accepted.loc[row.Index] = True
                 state = layer.states[key]
                 if decision.publish_buffer:
                     for idx in state.buffered_indices:
@@ -492,6 +496,7 @@ def selective_quarantine_gate_result(
                 "timeout_release_count": state.timeout_release_count,
                 "hard_veto_rejection_count": state.hard_veto_rejection_count,
                 "hard_veto_seen": state.hard_veto_seen,
+                "was_quarantined": state.was_quarantined,
             }
     metadata = pd.DataFrame(list(records.values()))
     parameters = qcfg.to_parameters()
@@ -517,6 +522,7 @@ def selective_quarantine_gate_result(
         metadata,
         "selective_trust_quarantine",
         json.dumps(parameters, sort_keys=True, separators=(",", ":")),
+        online_accepted.astype(bool),
     )
 
 

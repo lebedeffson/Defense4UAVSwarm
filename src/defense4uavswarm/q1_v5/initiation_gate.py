@@ -34,6 +34,7 @@ class GateResult:
     episode_metadata: pd.DataFrame
     method_id: str
     parameter_json: str
+    online_acceptance_mask: pd.Series | None = None
 
 
 def assign_episode_ids(candidates: pd.DataFrame, max_track_gap: int = 1) -> pd.DataFrame:

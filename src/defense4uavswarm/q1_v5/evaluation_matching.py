@@ -110,7 +110,22 @@ def evaluate_gate_result(
     episode_events = episode_event_table_from_gate(matched, gate_result.episode_metadata, config)
     gt_events = gt_confirmation_table(gt, episode_events)
     metrics = corrected_metrics(matched, gt, frame_manifest, episode_events)
+    if gate_result.online_acceptance_mask is not None:
+        online_series = gate_result.online_acceptance_mask.astype(bool)
+        if not online_series.index.equals(candidates.index):
+            raise ValueError("GateResult online_acceptance_mask index must match candidates index")
+        online_det = candidates.loc[online_series, keep].copy()
+        online_det = _prepare_accepted(online_det)
+        online_matched = _recompute_one_to_one_matches(online_det, gt, config, ignored)
+        online_events = episode_event_table_from_gate(online_matched, gate_result.episode_metadata, config)
+        online_metrics = corrected_metrics(online_matched, gt, frame_manifest, online_events)
+        for key, value in online_metrics.items():
+            if isinstance(value, (int, float, np.integer, np.floating)):
+                metrics[f"online_current_frame_{key}"] = value
+    for key in ["TP", "FP", "FN", "precision", "recall", "F1"]:
+        metrics[f"backfilled_map_{key}"] = metrics[key]
     _add_gt_confirmation_metrics(metrics, gt_events)
+    _add_quarantine_budget_metrics(metrics, gate_result.episode_metadata)
     metrics["matcher_id"] = config.matcher_id
     metrics["metric_source"] = "recomputed_after_acceptance"
     metrics["occupancy_scope"] = "observed_detection_rows_proxy"
@@ -397,14 +412,22 @@ def corrected_metrics(matched: pd.DataFrame, gt: pd.DataFrame, frame_index: pd.D
     precision = tp / max(1, tp + fp)
     recall = tp / max(1, tp + fn)
     f1 = 2 * precision * recall / max(1e-12, precision + recall)
-    false_events = track_events[track_events["is_false_initialization"].astype(bool)] if not track_events.empty else pd.DataFrame()
-    true_events = track_events[~track_events["is_false_initialization"].astype(bool)] if not track_events.empty else pd.DataFrame()
+    if not track_events.empty and "terminal_status" in track_events:
+        confirmed_events = track_events[track_events["terminal_status"].eq("confirmed")].copy()
+    else:
+        confirmed_events = track_events.copy()
+    false_events = confirmed_events[confirmed_events["is_false_initialization"].astype(bool)] if not confirmed_events.empty else pd.DataFrame()
+    true_events = confirmed_events[~confirmed_events["is_false_initialization"].astype(bool)] if not confirmed_events.empty else pd.DataFrame()
+    if len(true_events) + len(false_events) != len(confirmed_events):
+        raise AssertionError("confirmed initiation event partition is inconsistent")
     num_frames = max(1, len(frame_index.drop_duplicates(["sequence_id", "frame_id"]))) if frame_index is not None and not frame_index.empty else 1
     occ_col = "accepted_active_frame_count" if "accepted_active_frame_count" in track_events else "active_frame_count"
     observed_false_occ = int(false_events[occ_col].sum()) if not false_events.empty and occ_col in false_events else 0
     total_occ = int(track_events[occ_col].sum()) if not track_events.empty and occ_col in track_events else 0
     gate_delay_col = "gate_delay_frames" if "gate_delay_frames" in track_events else "gate_delay"
-    confirmed_events = track_events[track_events["terminal_status"].eq("confirmed")] if "terminal_status" in track_events and not track_events.empty else track_events
+    track_initiation_precision = int(len(true_events)) / max(1, int(len(confirmed_events)))
+    if not 0.0 <= track_initiation_precision <= 1.0:
+        raise AssertionError("track_initiation_precision outside [0, 1]")
     return {
         "TP": tp,
         "FP": fp,
@@ -417,8 +440,9 @@ def corrected_metrics(matched: pd.DataFrame, gt: pd.DataFrame, frame_index: pd.D
         "false_new_tracks_per_100_frames": int(len(false_events)) / num_frames * 100.0,
         "true_initializations": int(len(true_events)),
         "confirmed_episodes": int(len(confirmed_events)) if not confirmed_events.empty else 0,
-        "track_initiation_precision": int(len(true_events)) / max(1, int(len(confirmed_events)) if not confirmed_events.empty else len(track_events)),
+        "track_initiation_precision": track_initiation_precision,
         "observed_false_track_occupancy_rows": observed_false_occ,
+        "observed_false_track_occupancy_per_100_frames": observed_false_occ / num_frames * 100.0,
         "ignored_unmatched_detections": int(matched["ignored_unmatched_suppressed"].astype(bool).sum()) if not matched.empty and "ignored_unmatched_suppressed" in matched else 0,
         "observed_false_track_share": observed_false_occ / max(1, total_occ),
         "mean_observed_false_lifetime": float(false_events[occ_col].mean()) if not false_events.empty and occ_col in false_events else 0.0,
@@ -428,6 +452,23 @@ def corrected_metrics(matched: pd.DataFrame, gt: pd.DataFrame, frame_index: pd.D
         "track_breaks": _count_track_breaks(matched),
         "median_gate_delay_from_candidate": float(confirmed_events[gate_delay_col].dropna().median()) if not confirmed_events.empty and gate_delay_col in confirmed_events and confirmed_events[gate_delay_col].notna().any() else 0.0,
     }
+
+
+def _add_quarantine_budget_metrics(metrics: dict[str, float | int | str], episode_metadata: pd.DataFrame) -> None:
+    if episode_metadata.empty or "configured_quarantine_fraction" not in episode_metadata:
+        return
+    starts = int(len(episode_metadata))
+    quarantined = int(episode_metadata.get("was_quarantined", pd.Series(False, index=episode_metadata.index)).fillna(False).astype(bool).sum())
+    configured = float(episode_metadata["configured_quarantine_fraction"].dropna().max()) if episode_metadata["configured_quarantine_fraction"].notna().any() else 0.0
+    realized = quarantined / max(1, starts)
+    tolerance = 1.0 / max(1, starts)
+    metrics["episode_starts"] = starts
+    metrics["quarantined_starts"] = quarantined
+    metrics["configured_quarantine_fraction"] = configured
+    metrics["realized_quarantine_fraction"] = realized
+    metrics["timeout_releases"] = int(episode_metadata.get("timeout_release_count", pd.Series(0, index=episode_metadata.index)).fillna(0).astype(int).sum())
+    metrics["hard_veto_rejections"] = int(episode_metadata.get("hard_veto_rejection_count", pd.Series(0, index=episode_metadata.index)).fillna(0).astype(int).sum())
+    metrics["budget_invariant_pass"] = bool(realized <= configured + tolerance)
 
 
 def _add_gt_confirmation_metrics(metrics: dict[str, float | int | str], gt_events: pd.DataFrame) -> None:
