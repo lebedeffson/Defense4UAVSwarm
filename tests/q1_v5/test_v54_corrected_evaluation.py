@@ -5,7 +5,7 @@ import pytest
 
 from defense4uavswarm.q1_v5.confidence_normalizer import RollingPercentileConfidence
 from defense4uavswarm.q1_v5.evaluation_matching import MatchingConfig, build_frame_index, evaluate_acceptance_mask
-from defense4uavswarm.q1_v5.initiation_gate import GateConfig, assign_episode_ids, bayesian_terminal_gate, m_of_n_confirmation
+from defense4uavswarm.q1_v5.initiation_gate import GateConfig, assign_episode_ids, bayesian_terminal_gate, m_of_n_confirmation, split_duplicate_observation_tracklets
 from defense4uavswarm.q1_v5.kinematic_consistency import KinematicTrackState
 
 
@@ -138,6 +138,20 @@ def test_duplicate_observation_key_fixture_is_explicit():
         }
     )
     assert det.duplicated(["sequence_id", "tracklet_id", "episode_id", "frame_id", "det_id"]).any()
+
+
+def test_duplicate_episode_observation_repair_splits_tracklet_id():
+    det = pd.DataFrame(
+        {
+            "det_id": ["a", "b"],
+            "sequence_id": ["s", "s"],
+            "frame_id": [1, 1],
+            "tracklet_id": ["t", "t"],
+        }
+    )
+    repaired = split_duplicate_observation_tracklets(det)
+    repaired = assign_episode_ids(repaired)
+    assert not repaired.duplicated(["sequence_id", "tracklet_id", "episode_id", "frame_id"]).any()
 
 
 def test_mofn_and_bayesian_terminal_after_confirmation():

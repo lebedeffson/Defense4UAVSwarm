@@ -17,9 +17,14 @@ def main() -> None:
     bundle.parent.mkdir(parents=True, exist_ok=True)
     root = bundle.stem
     include = [
+        Path("pyproject.toml"),
+        Path("requirements.txt"),
         Path("configs/q1_v54"),
         Path("scripts/q1_v54"),
         Path("src/defense4uavswarm/q1_v5"),
+        Path("src/defense4uavswarm/q1_visdrone.py"),
+        Path("src/defense4uavswarm/v8_sim.py"),
+        Path("src/defense4uavswarm/datasets/visdrone.py"),
         Path("tests/q1_v5"),
         Path("data_manifests/visdrone_eval_frames.csv"),
         Path(args.results_root),

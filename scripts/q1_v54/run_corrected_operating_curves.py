@@ -10,9 +10,19 @@ from typing import Any
 import pandas as pd
 import yaml
 
-from defense4uavswarm.q1_v5.evaluation_matching import MatchingConfig, evaluate_acceptance_mask
+from defense4uavswarm.q1_v5.evaluation_matching import MatchingConfig, evaluate_gate_result
 from defense4uavswarm.q1_v5.frame_manifest import add_gt_presence, build_visdrone_frame_manifest, manifest_sha256, merge_manifest_dimensions
-from defense4uavswarm.q1_v5.initiation_gate import GateConfig, assign_episode_ids, bayesian_terminal_gate, confidence_initiation_gate, m_of_n_confirmation, terminalize_initiation
+from defense4uavswarm.q1_v5.initiation_gate import (
+    GateConfig,
+    GateResult,
+    assign_episode_ids,
+    bayesian_terminal_gate_result,
+    confidence_initiation_gate_result,
+    legacy_trust_gate_result,
+    m_of_n_confirmation_result,
+    split_duplicate_observation_tracklets,
+    tracker_baseline_gate_result,
+)
 from defense4uavswarm.q1_visdrone import Q1Params, load_gt_protocol, method_acceptance
 from defense4uavswarm.v8_sim import vector_iou
 
@@ -120,9 +130,16 @@ def _add_track_features(det: pd.DataFrame) -> pd.DataFrame:
     return d
 
 
-def run_method(name: str, det: pd.DataFrame, accepted: pd.Series, gt: pd.DataFrame, ignored: pd.DataFrame, frame_index: pd.DataFrame, mc: MatchingConfig, parameter: str, value: Any) -> dict[str, Any]:
-    _, events, metrics = evaluate_acceptance_mask(det, accepted, gt, frame_index, mc, ignored)
-    return {"method": name, "parameter": parameter, "parameter_value": value, **metrics, "num_track_events": len(events)}
+def run_method(gate: GateResult, det: pd.DataFrame, gt: pd.DataFrame, ignored: pd.DataFrame, frame_index: pd.DataFrame, mc: MatchingConfig, parameter: str, value: Any) -> dict[str, Any]:
+    result = evaluate_gate_result(det, gate, gt, ignored, frame_index, mc)
+    return {
+        "method": gate.method_id,
+        "parameter": parameter,
+        "parameter_value": value,
+        "parameter_json": gate.parameter_json,
+        **result.summary,
+        "num_track_events": len(result.episode_events),
+    }
 
 
 def main() -> None:
@@ -145,22 +162,22 @@ def main() -> None:
     gt, ignored = load_gt_protocol(cfg["dataset_root"], sorted(det["sequence_id"].unique()))
     frame_manifest = add_gt_presence(build_visdrone_frame_manifest(cfg["dataset_root"], sorted(det["sequence_id"].unique())), gt)
     det = merge_manifest_dimensions(det, frame_manifest)
+    det = split_duplicate_observation_tracklets(det)
     det = assign_episode_ids(det, gate_config(cfg).max_track_gap)
     frame_index = frame_manifest[["sequence_id", "frame_id", "image_path", "image_width", "image_height", "has_gt"]].copy()
     mc = matching_config(cfg)
     gc = gate_config(cfg)
     rows: list[dict[str, Any]] = []
-    rows.append(run_method("tracker_baseline", det, pd.Series(True, index=det.index), gt, ignored, frame_index, mc, "none", 0))
-    legacy_trigger = terminalize_initiation(det, method_acceptance(det, "geometry_dynamic_no_multiagent", Q1Params()), gc)
-    rows.append(run_method("legacy_trust_terminalized", det, legacy_trigger, gt, ignored, frame_index, mc, "legacy_trigger", 0))
+    rows.append(run_method(tracker_baseline_gate_result(det, gc), det, gt, ignored, frame_index, mc, "none", 0))
+    legacy_gate = legacy_trust_gate_result(det, method_acceptance(det, "geometry_dynamic_no_multiagent", Q1Params()), gc)
+    rows.append(run_method(legacy_gate, det, gt, ignored, frame_index, mc, "legacy_trigger", 0))
     for th in cfg.get("grids", {}).get("confidence_threshold", [0.2]):
-        rows.append(run_method("confidence_initiation_gate", det, confidence_initiation_gate(det, float(th), gc), gt, ignored, frame_index, mc, "threshold", th))
+        rows.append(run_method(confidence_initiation_gate_result(det, float(th), gc), det, gt, ignored, frame_index, mc, "threshold", th))
     for spec in cfg.get("grids", {}).get("m_of_n", []):
-        accepted = m_of_n_confirmation(det, int(spec["M"]), int(spec["N"]), float(spec["confidence_threshold"]), gc)
-        rows.append(run_method("m_of_n_confirmation", det, accepted, gt, ignored, frame_index, mc, f"M={spec['M']};N={spec['N']};conf", spec["confidence_threshold"]))
+        gate = m_of_n_confirmation_result(det, int(spec["M"]), int(spec["N"]), float(spec["confidence_threshold"]), gc)
+        rows.append(run_method(gate, det, gt, ignored, frame_index, mc, f"M={spec['M']};N={spec['N']};conf", spec["confidence_threshold"]))
     for th in cfg.get("grids", {}).get("bayesian_threshold", [1.1]):
-        accepted = bayesian_terminal_gate(det, threshold=float(th), cfg=gc)
-        rows.append(run_method("bayesian_fixed_terminal", det, accepted, gt, ignored, frame_index, mc, "threshold", th))
+        rows.append(run_method(bayesian_terminal_gate_result(det, threshold=float(th), cfg=gc), det, gt, ignored, frame_index, mc, "threshold", th))
     result = pd.DataFrame(rows)
     result.to_csv(out / "corrected_operating_points.csv", index=False)
     frame_manifest.to_csv(out / "frame_manifest.csv", index=False)
@@ -185,7 +202,7 @@ def main() -> None:
 
 def write_claim(result: pd.DataFrame) -> str:
     lines = ["# Corrected Operating Curves", "", "Metrics are recomputed after each acceptance mask with one-to-one GT matching. Old `eval_is_tp` columns are not used as metric source.", ""]
-    display_cols = ["method", "parameter", "parameter_value", "F1", "false_new_tracks", "observed_false_track_occupancy_rows", "metric_source"]
+    display_cols = ["method", "parameter", "parameter_value", "F1", "false_new_tracks", "observed_false_track_occupancy_rows", "median_gate_delay_from_candidate", "metric_source"]
     lines.append(result[display_cols].to_string(index=False))
     lines += ["", "Use these corrected tables for new article claims. Frozen legacy tables remain regression audits only."]
     return "\n".join(lines) + "\n"
