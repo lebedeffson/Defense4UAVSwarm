@@ -7,6 +7,7 @@ import json
 import os
 import platform
 import subprocess
+import sys
 import time
 from pathlib import Path
 from statistics import mean, median
@@ -15,6 +16,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from defense4uavswarm.q1_v5.frame_manifest import add_gt_presence, build_visdrone_frame_manifest, merge_manifest_dimensions
 from defense4uavswarm.q1_v5.initiation_gate import GateConfig, assign_episode_ids, split_duplicate_observation_tracklets
