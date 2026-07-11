@@ -98,7 +98,7 @@ def main() -> None:
                         "tracker": tracker,
                         "method": method,
                         "outer_test_sequence": row.outer_test_sequence,
-                        "delta_F1": getattr(row, "F1_method") - getattr(row, "F1_baseline"),
+                        "delta_F1": getattr(row, f"{f1_col}_method") - getattr(row, f"{f1_col}_baseline"),
                         "delta_occupancy": getattr(row, f"{occupancy_col}_method") - getattr(row, f"{occupancy_col}_baseline"),
                         "occupancy_metric": occupancy_col,
                     }

@@ -174,7 +174,7 @@ def _metrics_for_mask(
 ) -> dict[str, float]:
     frame_keys = frame_manifest[["sequence_id", "frame_id"]].drop_duplicates()
     cand = candidates.merge(frame_keys.assign(_in_eval_universe=True), on=["sequence_id", "frame_id"], how="left")
-    in_universe = cand["_in_eval_universe"].fillna(False).astype(bool).to_numpy()
+    in_universe = cand["_in_eval_universe"].notna().to_numpy()
     mask = accepted_series.astype(bool).to_numpy() & in_universe
     det = candidates.loc[pd.Series(mask, index=candidates.index), keep].copy()
     det = _prepare_accepted(det)
