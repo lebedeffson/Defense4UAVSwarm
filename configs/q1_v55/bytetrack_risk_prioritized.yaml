@@ -1,0 +1,39 @@
+protocol_id: q1_selective_quarantine_v22_risk_prioritized_two_stage
+base_commit: 8d1ea0e28eba0991e701a88fddfc1a74ff8024a7
+results_root: outputs/results/q1_selective_quarantine_v22_risk_prioritized
+
+dataset_root: data/visdrone/VisDrone2019-VID-val
+candidate_source: feature_audit
+tracker: bytetrack
+feature_audit: outputs/results/q1_final_corrected/yolov8s_main/feature_audit.csv
+
+matching:
+  iou_threshold: 0.5
+  class_matching: coarse_class
+  ignored_policy: exclude_ignored
+  confirmation_window_frames: 3
+  matcher_id: q1_v542_max_cardinality_iou_v1
+
+gate:
+  maximum_pending_age_frames: 6
+  max_track_gap: 1
+
+selection:
+  robust_inner_max_f1_loss: 0.01
+  robust_inner_mean_f1_loss: 0.005
+  robust_inner_max_confirm_loss: 0.01
+
+v22:
+  seed: 2026
+  bootstrap_resamples: 10000
+  h1_margin: -0.01
+  oracle_budgets: [0.01, 0.03, 0.05, 0.10, 0.15, 0.20]
+  stage1_budgets: [0.05, 0.10, 0.15]
+  stage2_budgets: [0.01, 0.03, 0.05]
+  stage2_horizons: [3, 5, 10]
+  alpha_stage1_true: 0.10
+  alpha_stage2_true: 0.05
+  runtime_target_median_ms: 2.0
+  runtime_target_p95_ms: 3.0
+  external_holdout_status: unavailable
+

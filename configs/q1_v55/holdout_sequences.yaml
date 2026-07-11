@@ -1,0 +1,3 @@
+external_holdout_status: unavailable
+reason: "No frozen unused VisDrone detector/tracker outputs are available in the repository for v2.2-RP."
+development_sequences_source: outputs/results/q1_selective_quarantine_v21/loso/bytetrack/outer_folds.json

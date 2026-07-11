@@ -32,6 +32,7 @@ METHODS: dict[str, MethodMetadata] = {
     "max_confidence_fusion": MethodMetadata("max_confidence_fusion", "Max confidence fusion", False, False, False, True, True, "controlled_multiagent"),
     "trust_strict_multiagent": MethodMetadata("trust_strict_multiagent", "Strict multi-agent trust", False, False, False, True, True, "controlled_multiagent"),
     "trust_balanced_multiagent": MethodMetadata("trust_balanced_multiagent", "Balanced multi-agent trust", False, False, True, True, True, "controlled_multiagent"),
+    "risk_prioritized_two_stage_quarantine": MethodMetadata("risk_prioritized_two_stage_quarantine", "Risk-prioritized two-stage quarantine", True, True, True, False, True, "visdrone"),
 }
 
 
@@ -40,4 +41,3 @@ def get_method(method_id: str) -> MethodMetadata:
         return METHODS[method_id]
     except KeyError as exc:
         raise KeyError(f"Unknown q1_v5 method: {method_id}") from exc
-
