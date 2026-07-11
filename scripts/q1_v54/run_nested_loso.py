@@ -150,6 +150,7 @@ def main() -> None:
             F1=("F1", "mean"),
             false_new_tracks_per_100_frames=("false_new_tracks_per_100_frames", "mean"),
             observed_false_track_occupancy_rows=("observed_false_track_occupancy_rows", "mean"),
+            observed_false_track_occupancy_per_100_frames=("observed_false_track_occupancy_per_100_frames", "mean"),
             true_track_confirmation_rate=("true_track_confirmation_rate", "mean"),
             median_gate_delay_from_candidate=("median_gate_delay_from_candidate", "median"),
             median_confirmation_delay_from_gt=("median_confirmation_delay_from_gt", "median"),
@@ -162,8 +163,46 @@ def main() -> None:
     outer.to_csv(out / "outer_test_by_sequence.csv", index=False)
     summary.to_csv(out / "outer_test_summary.csv", index=False)
     write_quarantine_budget_audit(outer, out / "quarantine_budget_by_sequence.csv")
+    write_terminal_audits(outer, out)
     (out / "run_metadata.json").write_text(json.dumps({"status": "success", "git_commit": git(["rev-parse", "HEAD"]), "branch": git(["branch", "--show-current"]), "tracker": tracker_name}, indent=2), encoding="utf-8")
     print(f"status=ok output={out} folds={len(folds)} rows={len(outer)}")
+
+
+def write_terminal_audits(outer: pd.DataFrame, out: Path) -> None:
+    data = outer[outer["method"].eq("selective_trust_quarantine")].copy() if not outer.empty and "method" in outer else pd.DataFrame()
+    terminal_cols = [
+        "tracker",
+        "outer_fold",
+        "sequence_id",
+        "episode_starts",
+        "quarantined_starts",
+        "evidence_confirmations",
+        "baseline_releases",
+        "hard_veto_rejections",
+        "temporal_absence_rejections",
+        "right_censored_episode_count",
+        "pending_end_count",
+        "selected_maximum_quarantine_frames",
+    ]
+    censor_cols = [
+        "tracker",
+        "outer_fold",
+        "sequence_id",
+        "full_sequence_frame_count",
+        "primary_frame_count",
+        "censoring_guard_frames",
+        "right_censored_episode_count",
+        "pending_end_count",
+    ]
+    if data.empty:
+        pd.DataFrame(columns=terminal_cols).to_csv(out / "episode_terminal_audit.csv", index=False)
+        pd.DataFrame(columns=censor_cols).to_csv(out / "censoring_audit.csv", index=False)
+        return
+    for col in terminal_cols + censor_cols:
+        if col not in data:
+            data[col] = 0
+    data[terminal_cols].to_csv(out / "episode_terminal_audit.csv", index=False)
+    data[censor_cols].to_csv(out / "censoring_audit.csv", index=False)
 
 
 def write_quarantine_budget_audit(outer: pd.DataFrame, path: Path) -> None:
@@ -177,6 +216,9 @@ def write_quarantine_budget_audit(outer: pd.DataFrame, path: Path) -> None:
         "realized_fraction",
         "timeout_releases",
         "hard_veto_rejections",
+        "temporal_absence_rejections",
+        "right_censored_episode_count",
+        "pending_end_count",
         "budget_invariant_pass",
     ]
     if outer.empty or "method" not in outer:
@@ -201,6 +243,9 @@ def write_quarantine_budget_audit(outer: pd.DataFrame, path: Path) -> None:
                 "realized_fraction": realized,
                 "timeout_releases": int(getattr(row, "timeout_releases", 0) or 0),
                 "hard_veto_rejections": int(getattr(row, "hard_veto_rejections", 0) or 0),
+                "temporal_absence_rejections": int(getattr(row, "temporal_absence_rejections", 0) or 0),
+                "right_censored_episode_count": int(getattr(row, "right_censored_episode_count", 0) or 0),
+                "pending_end_count": int(getattr(row, "pending_end_count", 0) or 0),
                 "budget_invariant_pass": bool(realized <= configured + tolerance),
             }
         )
@@ -210,7 +255,7 @@ def write_quarantine_budget_audit(outer: pd.DataFrame, path: Path) -> None:
 def _group_inner_candidates(method_train: pd.DataFrame, base_train: pd.DataFrame) -> pd.DataFrame:
     if method_train.empty:
         return pd.DataFrame()
-    method_train = method_train.dropna(subset=["F1", "observed_false_track_occupancy_rows"]).copy()
+    method_train = method_train.dropna(subset=["F1", "observed_false_track_occupancy_per_100_frames"]).copy()
     if method_train.empty:
         return pd.DataFrame(
             columns=[
@@ -244,7 +289,7 @@ def _group_inner_candidates(method_train: pd.DataFrame, base_train: pd.DataFrame
     joined["F1_delta"] = joined["F1"].astype(float) - joined["baseline_F1"].astype(float)
     joined["confirm_delta"] = joined["true_track_confirmation_rate"].astype(float) - joined["baseline_true_track_confirmation_rate"].astype(float)
     frames = joined["num_eval_frames"].astype(float).where(joined["num_eval_frames"].astype(float).gt(0), joined["baseline_num_eval_frames"].astype(float))
-    joined["occupancy_per_100_frames"] = joined["observed_false_track_occupancy_rows"].astype(float) / frames.clip(lower=1) * 100.0
+    joined["occupancy_per_100_frames"] = joined["observed_false_track_occupancy_per_100_frames"].astype(float)
     return (
         joined.groupby(["method", "parameter_json"], as_index=False)
         .agg(
@@ -297,7 +342,7 @@ def evaluate_sequence(seq: str, det: pd.DataFrame, gt: pd.DataFrame, ignored: pd
         elif kind == "bayesian":
             gate = bayesian_terminal_gate_result(d, threshold=float(spec["threshold"]), cfg=gc)
         elif kind == "selective_quarantine":
-            gate = selective_quarantine_gate_result(d, SelectiveTrustQuarantineConfig.from_mapping(spec.get("config")))
+            gate = selective_quarantine_gate_result(d, fm, SelectiveTrustQuarantineConfig.from_mapping(spec.get("config")))
         else:
             rows.append(
                 {
@@ -314,6 +359,9 @@ def evaluate_sequence(seq: str, det: pd.DataFrame, gt: pd.DataFrame, ignored: pd
         result = evaluate_gate_result(d, gate, g, ig, fm, mc)
         row = dict(result.summary)
         row.update({"sequence_id": seq, "tracker": tracker_name, "method": spec["method"], "parameter_json": gate.parameter_json, "label_access": label_access(spec["method"])})
+        if kind == "selective_quarantine":
+            row["active_profile"] = "selective_quarantine_v21"
+            row["selected_maximum_quarantine_frames"] = SelectiveTrustQuarantineConfig.from_mapping(spec.get("config")).maximum_quarantine_frames
         rows.append(row)
     return rows
 

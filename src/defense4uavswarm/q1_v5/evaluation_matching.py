@@ -110,21 +110,35 @@ def evaluate_gate_result(
     episode_events = episode_event_table_from_gate(matched, gate_result.episode_metadata, config)
     gt_events = gt_confirmation_table(gt, episode_events)
     metrics = corrected_metrics(matched, gt, frame_manifest, episode_events)
-    if gate_result.online_acceptance_mask is not None:
-        online_series = gate_result.online_acceptance_mask.astype(bool)
-        if not online_series.index.equals(candidates.index):
-            raise ValueError("GateResult online_acceptance_mask index must match candidates index")
-        online_det = candidates.loc[online_series, keep].copy()
-        online_det = _prepare_accepted(online_det)
-        online_matched = _recompute_one_to_one_matches(online_det, gt, config, ignored)
-        online_events = episode_event_table_from_gate(online_matched, gate_result.episode_metadata, config)
-        online_metrics = corrected_metrics(online_matched, gt, frame_manifest, online_events)
-        for key, value in online_metrics.items():
-            if isinstance(value, (int, float, np.integer, np.floating)):
-                metrics[f"online_current_frame_{key}"] = value
-    for key in ["TP", "FP", "FN", "precision", "recall", "F1"]:
-        metrics[f"backfilled_map_{key}"] = metrics[key]
     _add_gt_confirmation_metrics(metrics, gt_events)
+    backfilled_metrics = dict(metrics)
+    for key, value in backfilled_metrics.items():
+        if isinstance(value, (int, float, np.integer, np.floating)):
+            metrics[f"backfilled_map_{key}"] = value
+
+    online_series = gate_result.online_acceptance_mask.astype(bool) if gate_result.online_acceptance_mask is not None else accepted_series
+    if not online_series.index.equals(candidates.index):
+        raise ValueError("GateResult online_acceptance_mask index must match candidates index")
+    online_full_metrics = _metrics_for_mask(candidates, online_series, gt, ignored, frame_manifest, config, keep, gate_result.episode_metadata)
+    for key, value in online_full_metrics.items():
+        if isinstance(value, (int, float, np.integer, np.floating)):
+            metrics[f"full_sequence_online_{key}"] = value
+            metrics[f"online_current_frame_{key}"] = value
+
+    guard = 2
+    primary_frame_manifest = decision_complete_frame_manifest(frame_manifest, guard)
+    primary_metrics = _metrics_for_mask(candidates, online_series, gt, ignored, primary_frame_manifest, config, keep, gate_result.episode_metadata)
+    for key, value in primary_metrics.items():
+        if isinstance(value, (int, float, np.integer, np.floating)):
+            metrics[f"decision_complete_online_{key}"] = value
+    for key, value in primary_metrics.items():
+        if isinstance(value, (int, float, np.integer, np.floating)):
+            metrics[key] = value
+    metrics["primary_frame_count"] = int(len(primary_frame_manifest.drop_duplicates(["sequence_id", "frame_id"])))
+    metrics["full_sequence_frame_count"] = int(len(frame_manifest.drop_duplicates(["sequence_id", "frame_id"])))
+    metrics["censoring_guard_frames"] = int(guard)
+    metrics["primary_output"] = "decision_complete_online_current_frame"
+    metrics["backfilled_output_role"] = "secondary_only"
     _add_quarantine_budget_metrics(metrics, gate_result.episode_metadata)
     metrics["matcher_id"] = config.matcher_id
     metrics["metric_source"] = "recomputed_after_acceptance"
@@ -132,6 +146,54 @@ def evaluate_gate_result(
     metrics["method_id"] = gate_result.method_id
     metrics["parameter_json"] = gate_result.parameter_json
     return EvaluationResult(matched, episode_events, gt_events, metrics)
+
+
+def decision_complete_frame_manifest(frame_manifest: pd.DataFrame, guard: int) -> pd.DataFrame:
+    if frame_manifest is None or frame_manifest.empty:
+        return frame_manifest
+    rows = []
+    for _, group in frame_manifest.groupby("sequence_id", sort=False):
+        last = int(group["frame_id"].max())
+        first = int(group["frame_id"].min())
+        primary_last = last - int(guard)
+        if primary_last < first:
+            raise AssertionError("primary_last_frame must be >= physical first frame")
+        rows.append(group[group["frame_id"].astype(int) <= primary_last])
+    return pd.concat(rows, ignore_index=True) if rows else frame_manifest.iloc[0:0].copy()
+
+
+def _metrics_for_mask(
+    candidates: pd.DataFrame,
+    accepted_series: pd.Series,
+    gt: pd.DataFrame,
+    ignored: pd.DataFrame | None,
+    frame_manifest: pd.DataFrame,
+    config: MatchingConfig,
+    keep: list[str],
+    episode_metadata: pd.DataFrame,
+) -> dict[str, float]:
+    frame_keys = frame_manifest[["sequence_id", "frame_id"]].drop_duplicates()
+    cand = candidates.merge(frame_keys.assign(_in_eval_universe=True), on=["sequence_id", "frame_id"], how="left")
+    in_universe = cand["_in_eval_universe"].fillna(False).astype(bool).to_numpy()
+    mask = accepted_series.astype(bool).to_numpy() & in_universe
+    det = candidates.loc[pd.Series(mask, index=candidates.index), keep].copy()
+    det = _prepare_accepted(det)
+    matched = _recompute_one_to_one_matches(det, gt, config, ignored)
+    if episode_metadata.empty:
+        episode_meta_eval = episode_metadata
+    else:
+        meta = episode_metadata.copy()
+        eval_pairs = set((str(r.sequence_id), int(r.frame_id)) for r in frame_keys.itertuples(index=False))
+        keep_meta = [
+            (str(r.sequence_id), int(r.first_candidate_frame_id)) in eval_pairs
+            for r in meta.itertuples(index=False)
+        ]
+        episode_meta_eval = meta.loc[keep_meta].copy()
+    events = episode_event_table_from_gate(matched, episode_meta_eval, config)
+    gt_events = gt_confirmation_table(gt, events)
+    metrics = corrected_metrics(matched, gt, frame_manifest, events)
+    _add_gt_confirmation_metrics(metrics, gt_events)
+    return metrics
 
 
 def _assert_candidate_contract(candidates: pd.DataFrame, frame_manifest: pd.DataFrame) -> None:
@@ -468,6 +530,12 @@ def _add_quarantine_budget_metrics(metrics: dict[str, float | int | str], episod
     metrics["realized_quarantine_fraction"] = realized
     metrics["timeout_releases"] = int(episode_metadata.get("timeout_release_count", pd.Series(0, index=episode_metadata.index)).fillna(0).astype(int).sum())
     metrics["hard_veto_rejections"] = int(episode_metadata.get("hard_veto_rejection_count", pd.Series(0, index=episode_metadata.index)).fillna(0).astype(int).sum())
+    metrics["temporal_absence_rejections"] = int(episode_metadata.get("temporal_absence_rejection_count", pd.Series(0, index=episode_metadata.index)).fillna(0).astype(int).sum())
+    metrics["right_censored_episode_count"] = int(episode_metadata.get("right_censored", pd.Series(False, index=episode_metadata.index)).fillna(False).astype(bool).sum())
+    metrics["pending_end_count"] = int(episode_metadata.get("selective_terminal_status", pd.Series("", index=episode_metadata.index)).astype(str).eq("pending_end").sum())
+    metrics["evidence_confirmations"] = int(episode_metadata.get("selective_terminal_status", pd.Series("", index=episode_metadata.index)).astype(str).eq("CONFIRMED_BY_EVIDENCE").sum())
+    metrics["baseline_releases"] = int(episode_metadata.get("selective_terminal_status", pd.Series("", index=episode_metadata.index)).astype(str).eq("RELEASED_TO_BASELINE").sum())
+    metrics["censored_releases"] = int(episode_metadata.get("selective_terminal_status", pd.Series("", index=episode_metadata.index)).astype(str).eq("CENSORED_AT_SEQUENCE_END").sum())
     metrics["budget_invariant_pass"] = bool(realized <= configured + tolerance)
 
 

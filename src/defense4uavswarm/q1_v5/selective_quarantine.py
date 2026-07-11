@@ -17,6 +17,27 @@ from defense4uavswarm.q1_v5.confidence_normalizer import (
 from defense4uavswarm.q1_v5.initiation_gate import GateEpisodeRecord, GateResult, assert_unique_episode_observations
 
 
+FAST_PASSED = "FAST_PASSED"
+CONFIRMED_BY_EVIDENCE = "CONFIRMED_BY_EVIDENCE"
+RELEASED_TO_BASELINE = "RELEASED_TO_BASELINE"
+REJECTED_BY_HARD_VETO = "REJECTED_BY_HARD_VETO"
+REJECTED_BY_TEMPORAL_ABSENCE = "REJECTED_BY_TEMPORAL_ABSENCE"
+CENSORED_AT_SEQUENCE_END = "CENSORED_AT_SEQUENCE_END"
+
+
+@dataclass(frozen=True)
+class TerminalTransition:
+    sequence_id: str
+    tracklet_id: str
+    episode_id: int
+    transition_frame_id: int
+    selective_terminal_status: str
+    terminal_reason: str
+    publish_buffer: bool
+    publish_future: bool
+    right_censored: bool
+
+
 @dataclass(frozen=True)
 class SelectiveTrustQuarantineConfig:
     episode_start_history_only: bool = True
@@ -62,6 +83,7 @@ class SelectiveTrustQuarantineConfig:
 class QuarantineState:
     first_frame_id: int
     last_frame_id: int
+    decision_deadline_frame_id: int
     accumulated_hazard: float = 0.0
     buffered_indices: list[Any] = field(default_factory=list)
     observed_hits: int = 0
@@ -79,8 +101,16 @@ class QuarantineState:
     episode_start_rank: float | None = None
     timeout_release_count: int = 0
     hard_veto_rejection_count: int = 0
+    temporal_absence_rejection_count: int = 0
+    censored_release_count: int = 0
     terminal_reason: str = ""
     was_quarantined: bool = False
+    finalization_frame_id: int | None = None
+    timeout_frame_id: int | None = None
+    right_censored: bool = False
+    temporal_absence_condition: bool = False
+    negative_evidence_type: str = "none"
+    selective_terminal_status: str = ""
 
 
 @dataclass(frozen=True)
@@ -251,6 +281,7 @@ class SelectiveTrustQuarantine:
                 self.states[key] = QuarantineState(
                     first_frame_id=int(frame_id),
                     last_frame_id=int(frame_id),
+                    decision_deadline_frame_id=int(frame_id) + int(self.cfg.maximum_quarantine_frames),
                     observed_hits=1,
                     terminal_status="fast_passed",
                     confirmation_frame_id=int(frame_id),
@@ -263,12 +294,15 @@ class SelectiveTrustQuarantine:
                     episode_start_rank=episode_start_rank,
                     hard_veto_seen=bool(hard_veto),
                     terminal_reason="fast_pass_high_support",
+                    finalization_frame_id=int(frame_id),
+                    selective_terminal_status=FAST_PASSED,
                 )
                 return SelectiveTrustDecision("FAST_PASSED", True, False, support, support, quarantine_threshold, quarantine_fraction, "fast_pass_high_support", budget_tokens_before, budget_tokens_after, episode_start_rank, realized_quarantine_fraction, hard_veto)
             if not should_quarantine_start:
                 self.states[key] = QuarantineState(
                     first_frame_id=int(frame_id),
                     last_frame_id=int(frame_id),
+                    decision_deadline_frame_id=int(frame_id) + int(self.cfg.maximum_quarantine_frames),
                     observed_hits=1,
                     terminal_status="fast_passed",
                     confirmation_frame_id=int(frame_id),
@@ -281,11 +315,14 @@ class SelectiveTrustQuarantine:
                     episode_start_rank=episode_start_rank,
                     hard_veto_seen=bool(hard_veto),
                     terminal_reason="fast_pass_budget_or_threshold",
+                    finalization_frame_id=int(frame_id),
+                    selective_terminal_status=FAST_PASSED,
                 )
                 return SelectiveTrustDecision("FAST_PASSED", True, False, support, support, quarantine_threshold, quarantine_fraction, "fast_pass_budget_or_threshold", budget_tokens_before, budget_tokens_after, episode_start_rank, realized_quarantine_fraction, hard_veto)
             state = QuarantineState(
                 first_frame_id=int(frame_id),
                 last_frame_id=int(frame_id),
+                decision_deadline_frame_id=int(frame_id) + int(self.cfg.maximum_quarantine_frames),
                 observed_hits=1,
                 buffered_indices=[row_index],
                 support_history=[support],
@@ -347,8 +384,10 @@ class SelectiveTrustQuarantine:
             state.terminal_status = "confirmed"
             state.confirmation_frame_id = int(frame_id)
             state.terminal_reason = "hazard_confirmed"
+            state.finalization_frame_id = int(frame_id)
+            state.selective_terminal_status = CONFIRMED_BY_EVIDENCE
             return SelectiveTrustDecision(
-                "CONFIRMED",
+                CONFIRMED_BY_EVIDENCE,
                 True,
                 bool(self.cfg.buffer_backfill),
                 support,
@@ -357,25 +396,97 @@ class SelectiveTrustQuarantine:
                 quarantine_fraction,
                 "hazard_confirmed",
             )
-        if age > int(self.cfg.maximum_quarantine_frames):
-            if self.cfg.timeout_policy == "release_to_baseline" or (self.cfg.reject_requires_hard_veto and not state.hard_veto_seen):
-                state.terminal_status = "released_to_baseline"
-                state.confirmation_frame_id = int(frame_id)
-                state.timeout_release_count += 1
-                state.terminal_reason = "timeout_release_to_baseline"
-                return SelectiveTrustDecision("RELEASED_TO_BASELINE", True, bool(self.cfg.buffer_backfill), support, accumulated_support, quarantine_threshold, quarantine_fraction, "timeout_release_to_baseline")
-            state.terminal_status = "rejected"
-            state.rejection_frame_id = int(frame_id)
-            state.hard_veto_rejection_count += 1 if state.hard_veto_seen else 0
-            state.terminal_reason = "maximum_quarantine_reject_with_veto" if state.hard_veto_seen else "maximum_quarantine_reject"
-            return SelectiveTrustDecision("REJECTED", False, False, support, accumulated_support, quarantine_threshold, quarantine_fraction, state.terminal_reason)
         return SelectiveTrustDecision("QUARANTINED", False, False, support, accumulated_support, quarantine_threshold, quarantine_fraction, "hazard_pending")
+
+    def advance_frame(self, *, sequence_id: str, frame_id: int) -> list[TerminalTransition]:
+        transitions: list[TerminalTransition] = []
+        for key, state in list(self.states.items()):
+            if key[0] != str(sequence_id):
+                continue
+            if state.terminal_status != "quarantined":
+                continue
+            if int(frame_id) > int(state.decision_deadline_frame_id):
+                transitions.append(self._finalize_expired_state(key, state, int(frame_id), right_censored=False))
+        return transitions
+
+    def finalize_sequence(self, *, sequence_id: str, final_frame_id: int) -> list[TerminalTransition]:
+        transitions: list[TerminalTransition] = []
+        for key, state in list(self.states.items()):
+            if key[0] != str(sequence_id):
+                continue
+            if state.terminal_status != "quarantined":
+                continue
+            full_window_available = int(final_frame_id) >= int(state.decision_deadline_frame_id)
+            transitions.append(self._finalize_expired_state(key, state, int(final_frame_id), right_censored=not full_window_available))
+        return transitions
+
+    def _finalize_expired_state(
+        self,
+        key: tuple[str, str, int],
+        state: QuarantineState,
+        transition_frame_id: int,
+        *,
+        right_censored: bool,
+    ) -> TerminalTransition:
+        seq, tid, episode_id = key
+        state.finalization_frame_id = int(transition_frame_id)
+        state.timeout_frame_id = int(transition_frame_id)
+        if right_censored:
+            state.terminal_status = "released_to_baseline"
+            state.confirmation_frame_id = int(state.last_frame_id)
+            state.right_censored = True
+            state.censored_release_count += 1
+            state.terminal_reason = "right_censored_sequence_end"
+            state.selective_terminal_status = CENSORED_AT_SEQUENCE_END
+            publish_buffer = bool(self.cfg.buffer_backfill)
+            publish_future = False
+        elif state.hard_veto_seen:
+            state.terminal_status = "rejected"
+            state.rejection_frame_id = int(transition_frame_id)
+            state.hard_veto_rejection_count += 1
+            state.terminal_reason = "hard_veto_expired"
+            state.negative_evidence_type = "hard_veto"
+            state.selective_terminal_status = REJECTED_BY_HARD_VETO
+            publish_buffer = False
+            publish_future = False
+        elif int(state.observed_hits) == 1:
+            state.terminal_status = "rejected"
+            state.rejection_frame_id = int(transition_frame_id)
+            state.temporal_absence_condition = True
+            state.temporal_absence_rejection_count += 1
+            state.terminal_reason = "temporal_absence_expired"
+            state.negative_evidence_type = "temporal_absence"
+            state.selective_terminal_status = REJECTED_BY_TEMPORAL_ABSENCE
+            publish_buffer = False
+            publish_future = False
+        else:
+            state.terminal_status = "released_to_baseline"
+            state.confirmation_frame_id = int(transition_frame_id)
+            state.timeout_release_count += 1
+            state.terminal_reason = "timeout_release_to_baseline"
+            state.selective_terminal_status = RELEASED_TO_BASELINE
+            publish_buffer = bool(self.cfg.buffer_backfill)
+            publish_future = True
+        return TerminalTransition(
+            sequence_id=seq,
+            tracklet_id=tid,
+            episode_id=int(episode_id),
+            transition_frame_id=int(transition_frame_id),
+            selective_terminal_status=state.selective_terminal_status,
+            terminal_reason=state.terminal_reason,
+            publish_buffer=publish_buffer,
+            publish_future=publish_future,
+            right_censored=bool(right_censored),
+        )
 
 
 def selective_quarantine_gate_result(
     candidates: pd.DataFrame,
+    frame_manifest: pd.DataFrame,
     cfg: SelectiveTrustQuarantineConfig | dict[str, Any] | None = None,
 ) -> GateResult:
+    if frame_manifest is None or frame_manifest.empty:
+        raise ValueError("selective quarantine v2.1 requires a physical frame_manifest")
     qcfg = cfg if isinstance(cfg, SelectiveTrustQuarantineConfig) else SelectiveTrustQuarantineConfig.from_mapping(cfg)
     if "episode_id" not in candidates:
         raise ValueError("selective quarantine requires episode_id assigned before running")
@@ -388,12 +499,19 @@ def selective_quarantine_gate_result(
     stats_by_seq: dict[str, SequenceAdaptiveStats] = {}
     event_rows: list[dict[str, Any]] = []
 
-    for seq, seq_group in data.sort_values(["sequence_id", "frame_id", "tracklet_id", "episode_id"]).groupby("sequence_id", sort=False):
+    for seq, manifest_seq in frame_manifest.sort_values(["sequence_id", "frame_id"]).groupby("sequence_id", sort=False):
         seq = str(seq)
+        seq_group = data[data["sequence_id"].astype(str).eq(seq)].copy()
         stats = stats_by_seq.setdefault(seq, SequenceAdaptiveStats(qcfg))
         layer = layers.setdefault(seq, SelectiveTrustQuarantine(qcfg))
-        for frame_id, frame in seq_group.groupby("frame_id", sort=True):
+        by_frame = {int(fid): frame.copy() for fid, frame in seq_group.groupby("frame_id", sort=True)}
+        last_frame_id = int(manifest_seq["frame_id"].max())
+        for frame_id in sorted(int(x) for x in manifest_seq["frame_id"].unique()):
             stats.close_expired_starts(int(frame_id))
+            _apply_transitions(layer.advance_frame(sequence_id=seq, frame_id=int(frame_id)), layer, accepted, online_accepted)
+            frame = by_frame.get(int(frame_id), pd.DataFrame(columns=seq_group.columns))
+            if frame.empty:
+                continue
             frame = frame.sort_values(["tracklet_id", "episode_id", "det_id" if "det_id" in frame else "frame_id"])
             supports, rel_scores, rel_keys = stats.score_support_batch(frame)
             threshold = stats.quarantine_threshold()
@@ -462,6 +580,7 @@ def selective_quarantine_gate_result(
                     }
                 )
             stats.update_after_frame(confidences, rel_keys, supports, start_flags)
+        _apply_transitions(layer.finalize_sequence(sequence_id=seq, final_frame_id=last_frame_id), layer, accepted, online_accepted)
 
     for seq, layer in layers.items():
         for (state_seq, tid, episode_id), state in layer.states.items():
@@ -470,8 +589,6 @@ def selective_quarantine_gate_result(
             terminal = state.terminal_status
             confirmation = state.confirmation_frame_id
             rejection = state.rejection_frame_id
-            if terminal == "quarantined":
-                terminal = "pending_end"
             status_for_evaluator = "confirmed" if terminal in {"confirmed", "fast_passed", "released_to_baseline"} else "rejected" if terminal == "rejected" else terminal
             records[(state_seq, tid, episode_id)] = {
                 **GateEpisodeRecord(
@@ -487,7 +604,16 @@ def selective_quarantine_gate_result(
                     last_observed_frame_id=int(state.last_frame_id),
                 ).__dict__,
                 "selective_terminal_status": terminal,
+                "selective_terminal_status": state.selective_terminal_status or (FAST_PASSED if terminal == "fast_passed" else CONFIRMED_BY_EVIDENCE if terminal == "confirmed" else RELEASED_TO_BASELINE if terminal == "released_to_baseline" else REJECTED_BY_HARD_VETO if terminal == "rejected" and state.hard_veto_seen else REJECTED_BY_TEMPORAL_ABSENCE if terminal == "rejected" else terminal),
                 "terminal_reason": state.terminal_reason,
+                "decision_deadline_frame_id": state.decision_deadline_frame_id,
+                "finalization_frame_id": state.finalization_frame_id,
+                "timeout_frame_id": state.timeout_frame_id,
+                "right_censored": state.right_censored,
+                "temporal_absence_condition": state.temporal_absence_condition,
+                "temporal_absence_rejection_count": state.temporal_absence_rejection_count,
+                "censored_release_count": state.censored_release_count,
+                "negative_evidence_type": state.negative_evidence_type,
                 "configured_quarantine_fraction": state.configured_quarantine_fraction,
                 "realized_quarantine_fraction": state.realized_quarantine_fraction,
                 "budget_tokens_before": state.budget_tokens_before,
@@ -524,6 +650,19 @@ def selective_quarantine_gate_result(
         json.dumps(parameters, sort_keys=True, separators=(",", ":")),
         online_accepted.astype(bool),
     )
+
+
+def _apply_transitions(
+    transitions: list[TerminalTransition],
+    layer: SelectiveTrustQuarantine,
+    accepted: pd.Series,
+    online_accepted: pd.Series,
+) -> None:
+    for tr in transitions:
+        state = layer.states[(tr.sequence_id, tr.tracklet_id, int(tr.episode_id))]
+        if tr.publish_buffer:
+            for idx in state.buffered_indices:
+                accepted.loc[idx] = True
 
 
 def _support_to_hazard(support: float, epsilon: float) -> float:

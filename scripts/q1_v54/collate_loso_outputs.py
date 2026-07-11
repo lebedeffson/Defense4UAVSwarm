@@ -25,6 +25,8 @@ def main() -> None:
     folds_payload = []
     summaries = []
     budgets = []
+    terminal_audits = []
+    censoring_audits = []
     for item in args.inputs:
         root = Path(item)
         if not root.exists():
@@ -37,6 +39,10 @@ def main() -> None:
             summaries.append(pd.read_csv(root / "outer_test_summary.csv"))
         if (root / "quarantine_budget_by_sequence.csv").exists():
             budgets.append(pd.read_csv(root / "quarantine_budget_by_sequence.csv"))
+        if (root / "episode_terminal_audit.csv").exists():
+            terminal_audits.append(pd.read_csv(root / "episode_terminal_audit.csv"))
+        if (root / "censoring_audit.csv").exists():
+            censoring_audits.append(pd.read_csv(root / "censoring_audit.csv"))
         if (root / "outer_folds.json").exists():
             folds_payload.extend(json.loads((root / "outer_folds.json").read_text(encoding="utf-8")))
     if frames:
@@ -48,6 +54,10 @@ def main() -> None:
         pd.concat(summaries, ignore_index=True).to_csv(out / "outer_test_summary.csv", index=False)
     if budgets:
         pd.concat(budgets, ignore_index=True).to_csv(out / "quarantine_budget_by_sequence.csv", index=False)
+    if terminal_audits:
+        pd.concat(terminal_audits, ignore_index=True).to_csv(out / "episode_terminal_audit.csv", index=False)
+    if censoring_audits:
+        pd.concat(censoring_audits, ignore_index=True).to_csv(out / "censoring_audit.csv", index=False)
     (out / "outer_folds.json").write_text(json.dumps(folds_payload, indent=2), encoding="utf-8")
     print(f"status=ok output={out} rows={sum(len(x) for x in frames) if frames else 0}")
 

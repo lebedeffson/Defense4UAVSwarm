@@ -15,6 +15,11 @@ selection:
   robust_inner_max_f1_loss: 0.01
   robust_inner_mean_f1_loss: 0.005
   robust_inner_max_confirm_loss: 0.01
+evaluation:
+  primary_output: online_current_frame
+  censoring_policy: fixed_guard_frames
+  censoring_guard_frames: 2
+  backfilled_output_role: secondary_only
 grids:
   confidence_threshold: [0.1, 0.2, 0.3, 0.4, 0.5]
   m_of_n:

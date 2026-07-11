@@ -181,7 +181,7 @@ def main() -> None:
         rows.append(run_method(bayesian_terminal_gate_result(det, threshold=float(th), cfg=gc), det, gt, ignored, frame_index, mc, "threshold", th))
     for spec in cfg.get("grids", {}).get("selective_quarantine", []):
         qcfg = SelectiveTrustQuarantineConfig.from_mapping(spec)
-        rows.append(run_method(selective_quarantine_gate_result(det, qcfg), det, gt, ignored, frame_index, mc, "selective_quarantine", json.dumps(qcfg.to_parameters(), sort_keys=True)))
+        rows.append(run_method(selective_quarantine_gate_result(det, frame_manifest, qcfg), det, gt, ignored, frame_index, mc, "selective_quarantine", json.dumps(qcfg.to_parameters(), sort_keys=True)))
     result = pd.DataFrame(rows)
     result.to_csv(out / "corrected_operating_points.csv", index=False)
     frame_manifest.to_csv(out / "frame_manifest.csv", index=False)
@@ -192,7 +192,7 @@ def main() -> None:
                 "status": "success",
                 "git_commit": git(["rev-parse", "HEAD"]),
                 "branch": git(["branch", "--show-current"]),
-                "protocol_id": "q1_v542_article_grade_partial",
+                "protocol_id": "q1_selective_quarantine_v21_final",
                 "matcher_id": mc.matcher_id,
                 "metric_source": "recomputed_after_acceptance",
                 "manifest_sha256": manifest_sha256(frame_manifest),

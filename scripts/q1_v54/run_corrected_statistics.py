@@ -35,17 +35,20 @@ def main() -> None:
     samples_payload: dict[str, np.ndarray] = {}
     rng = np.random.default_rng(args.seed)
     for tracker, group in df.groupby("tracker", sort=False):
-        occupancy_col = "observed_false_track_occupancy_per_100_frames"
+        occupancy_col = "decision_complete_online_observed_false_track_occupancy_per_100_frames"
+        if occupancy_col not in group.columns:
+            occupancy_col = "observed_false_track_occupancy_per_100_frames"
         if occupancy_col not in group.columns:
             occupancy_col = "observed_false_track_occupancy_rows"
-        base = group[group["method"].eq("tracker_baseline")][["outer_test_sequence", "F1", occupancy_col, "false_new_tracks_per_100_frames"]]
+        f1_col = "decision_complete_online_F1" if "decision_complete_online_F1" in group.columns else "F1"
+        base = group[group["method"].eq("tracker_baseline")][["outer_test_sequence", f1_col, occupancy_col, "false_new_tracks_per_100_frames"]]
         for method, mg in group.groupby("method", sort=False):
             if method == "tracker_baseline":
                 continue
             paired = mg.merge(base, on="outer_test_sequence", suffixes=("_method", "_baseline"))
             if paired.empty:
                 continue
-            f1_delta = paired["F1_method"].astype(float).to_numpy() - paired["F1_baseline"].astype(float).to_numpy()
+            f1_delta = paired[f"{f1_col}_method"].astype(float).to_numpy() - paired[f"{f1_col}_baseline"].astype(float).to_numpy()
             occ_delta = paired[f"{occupancy_col}_method"].astype(float).to_numpy() - paired[f"{occupancy_col}_baseline"].astype(float).to_numpy()
             f1_samples = paired_bootstrap_mean(f1_delta, args.n_resamples, rng)
             occ_samples = paired_bootstrap_mean(occ_delta, args.n_resamples, rng)
@@ -62,6 +65,7 @@ def main() -> None:
                     "tracker": tracker,
                     "method": method,
                     "hypothesis": "H1_F1_noninferiority",
+                    "metric": f1_col,
                     "tested_after_h1": True,
                     "n_sequences": len(f1_delta),
                     "mean_delta": float(f1_delta.mean()),
