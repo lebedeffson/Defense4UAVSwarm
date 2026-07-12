@@ -1,0 +1,78 @@
+dataset_root: data/visdrone/VisDrone2019-VID-val
+candidate_source: mot_tracks
+tracker: sort
+tracks_root: outputs/q1_practical_closure_v7/sort/tracker_outputs
+matching:
+  iou_threshold: 0.5
+  class_matching: coarse_class
+  ignored_policy: exclude_ignored
+  confirmation_window_frames: 3
+  matcher_id: q1_v542_max_cardinality_iou_v1
+gate:
+  maximum_pending_age_frames: 6
+  max_track_gap: 1
+selection:
+  robust_inner_max_f1_loss: 0.01
+  robust_inner_mean_f1_loss: 0.005
+  robust_inner_max_confirm_loss: 0.01
+evaluation:
+  primary_output: online_current_frame
+  censoring_policy: fixed_guard_frames
+  censoring_guard_frames: 2
+  backfilled_output_role: secondary_only
+grids:
+  confidence_threshold: []
+  m_of_n: []
+  bayesian_threshold: []
+  selective_quarantine:
+    - tracker_profile: sort
+      episode_start_history_only: true
+      hard_budget_enabled: true
+      budget_capacity: 2.0
+      timeout_policy: release_to_baseline
+      reject_requires_hard_veto: true
+      critical_confidence_floor: 0.02
+      confidence_floor: 0.05
+      relative_weight: 0.4
+      quarantine_fraction_min: 0.00
+      quarantine_fraction_max: 0.00
+      fast_pass_support: 0.65
+      evidence_decay: 0.75
+      missing_frame_penalty: 0.15
+      confirmation_support: 0.50
+      maximum_quarantine_frames: 1
+      buffer_backfill: true
+    - tracker_profile: sort
+      episode_start_history_only: true
+      hard_budget_enabled: true
+      budget_capacity: 2.0
+      timeout_policy: release_to_baseline
+      reject_requires_hard_veto: true
+      critical_confidence_floor: 0.02
+      confidence_floor: 0.05
+      relative_weight: 0.4
+      quarantine_fraction_min: 0.00
+      quarantine_fraction_max: 0.02
+      fast_pass_support: 0.65
+      evidence_decay: 0.75
+      missing_frame_penalty: 0.15
+      confirmation_support: 0.50
+      maximum_quarantine_frames: 1
+      buffer_backfill: true
+    - tracker_profile: sort
+      episode_start_history_only: true
+      hard_budget_enabled: true
+      budget_capacity: 2.0
+      timeout_policy: release_to_baseline
+      reject_requires_hard_veto: true
+      critical_confidence_floor: 0.02
+      confidence_floor: 0.05
+      relative_weight: 0.4
+      quarantine_fraction_min: 0.00
+      quarantine_fraction_max: 0.05
+      fast_pass_support: 0.80
+      evidence_decay: 0.75
+      missing_frame_penalty: 0.15
+      confirmation_support: 0.65
+      maximum_quarantine_frames: 1
+      buffer_backfill: true
