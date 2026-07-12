@@ -20,3 +20,9 @@ Primary methods:
 - `rf_learned_gate`
 
 `geometry_dynamic_no_multiagent` disables inter-agent and epipolar support. It uses confidence, temporal linking, kinematic consistency, and log-odds style persistence.
+
+Claim-safe reading:
+
+- Compare the trust layer only against the simple confidence-threshold and simple fusion baselines implemented in this protocol.
+- These results do not prove superiority over ByteTrack, the Bayesian existence filter, learned classifiers, modern trackers, or cooperative perception methods.
+- The defensible claim is that the trust layer provides an interpretable, conservative operating point under the current real-detector protocol.

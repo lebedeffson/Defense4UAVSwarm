@@ -13,7 +13,7 @@ Run YOLO detections:
   --runtime-output outputs/results/q1_real_detector/detections/yolov8n_runtime.csv
 ```
 
-Run main trust comparison:
+Run legacy controlled-replay comparison:
 
 ```bash
 /home/lebedeffson/Code/venv/bin/python scripts/run_q1_real_detector_trust_experiment.py \
@@ -22,6 +22,21 @@ Run main trust comparison:
   --methods s_naive persistence_gate bayesian_existence_filter ema_confidence_gate bytetrack s2_logodds_temporal geometry_dynamic_no_multiagent rf_learned_gate \
   --output-dir outputs/results/q1_real_detector/yolov8n_main
 ```
+
+The `q1_final_plus` result folders belong to an earlier experimental protocol and are not part of the confirmatory Selective Trust Quarantine v2.1 analysis. Do not merge numbers, methods, or conclusions from these protocols into one comparison table.
+
+Current curated v18 practice bundle:
+
+- `outputs/bundles/Defense4UAVSwarm_q1_final_plus_v18_practice_bundle.zip`
+
+Current claim-safe result folders:
+
+- `outputs/results/q1_final_plus/confidence_threshold_baseline_yolov8s/`
+- `outputs/results/q1_final_plus/tradeoff_yolov8s/`
+- `outputs/results/q1_final_plus/simple_fusion_baselines/`
+- `outputs/results/q1_final_plus/feature_ablation_final_controlled/`
+- `outputs/results/q1_final_plus/failure_case_mining/`
+- `outputs/results/q1_final_plus/runtime_vectorization/`
 
 Run label scarcity:
 
