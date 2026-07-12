@@ -2,15 +2,19 @@
 
 ## Current Commit
 
-- Commit: `e36a18b q1 v18 close reviewer claims`
+- Commit: `a6757cd q1 add final practice handoff`
 - Branch: `feature/q1-selective-v22-risk-prioritized`
 
 ## Final Bundles
 
 - Slim review/practice bundle:
   `outputs/bundles/Defense4UAVSwarm_q1_final_plus_v18_practice_bundle.zip`
+  - Size: `410883` bytes
+  - SHA256: `483385572e4618c36b4be694b0df5ec7c3b71cb4773f9d0758ee6ed796b066d2`
 - Refreshed all-data bundle:
   `outputs/bundles/Defense4UAVSwarm_q1_all_data_selective_v2_final.zip`
+  - Size: `151005765` bytes
+  - SHA256: `5dc41af0a73a2fc29159cb79647b44f830ed8b67e40c1655d05500309a570e90`
 
 The all-data bundle includes Q1 outputs, detector JSON, configs, scripts, source,
 tests, docs, and reproducibility metadata. It excludes raw VisDrone images,
