@@ -20,3 +20,10 @@ Primary methods:
 - `rf_learned_gate`
 
 `geometry_dynamic_no_multiagent` disables inter-agent and epipolar support. It uses confidence, temporal linking, kinematic consistency, and log-odds style persistence.
+
+Claim-safe reading:
+
+- Compare the trust layer against simple confidence-threshold and simple fusion baselines.
+- Do not present it as cooperative perception SOTA or as a better-than-all-baselines result.
+- The defensible claim is that it provides an interpretable, conservative operating point under the current real-detector protocol.
+- For grouped diagnostics, use candidate-level wording: the bins condition on saved detector candidates and do not include missed GT objects outside those candidates.

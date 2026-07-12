@@ -35,3 +35,24 @@ Run label scarcity:
   --methods s_naive persistence_gate bayesian_existence_filter ema_confidence_gate bytetrack s2_logodds_temporal geometry_dynamic_no_multiagent rf_learned_gate \
   --output-dir outputs/results/q1_label_scarcity/yolov8n
 ```
+
+Current curated v18 practice bundle:
+
+- `outputs/bundles/Defense4UAVSwarm_q1_final_plus_v18_practice_bundle.zip`
+
+Current claim-safe result folders:
+
+- `outputs/results/q1_final_plus/confidence_threshold_baseline_yolov8s/`
+- `outputs/results/q1_final_plus/tradeoff_yolov8s/`
+- `outputs/results/q1_final_plus/simple_fusion_baselines/`
+- `outputs/results/q1_final_plus/feature_ablation_final_controlled/`
+- `outputs/results/q1_final_plus/failure_case_mining/`
+- `outputs/results/q1_final_plus/runtime_vectorization/`
+- `outputs/results/q1_final_plus/review_closure/`
+
+Review-closure artifacts:
+
+```bash
+/home/lebedeffson/Code/venv/bin/python scripts/build_q1_review_closure_matrix.py \
+  --output-dir outputs/results/q1_final_plus/review_closure
+```

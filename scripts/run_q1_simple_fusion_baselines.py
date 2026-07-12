@@ -181,15 +181,22 @@ def plot_tradeoff(summary: pd.DataFrame, path: Path) -> None:
 
 def write_claim_safe(path: Path, summary: pd.DataFrame, source: str) -> None:
     proposed = row(summary, "S2_v9_selected")
+    bayes = row(summary, "bayesian_existence_filter")
     lines = ["# Simple Fusion Baselines Claim-Safe Notes", "", f"Actual controlled input source: `{source}`.", ""]
     lines += ["```text", summary[["method", "F1", "false_new_tracks"]].to_string(index=False), "```", ""]
     for name in ["naive_union", "mean_confidence_fusion", "max_confidence_fusion", "bayesian_existence_filter"]:
         r = row(summary, name)
         if proposed is not None and r is not None:
             lines.append(f"- Proposed vs {name}: F1 delta={proposed['F1'] - r['F1']:+.6f}, false_new delta={proposed['false_new_tracks'] - r['false_new_tracks']:+.1f}.")
+    if proposed is not None and bayes is not None:
+        bayes_dominates = float(bayes["F1"]) >= float(proposed["F1"]) and float(bayes["false_new_tracks"]) <= float(proposed["false_new_tracks"])
+        lines.append(
+            f"- Bayesian existence filter dominates proposed point: {'yes' if bayes_dominates else 'no'}."
+        )
     lines += [
         "",
-        "Safe claim: the proposed layer is compared with simple fusion baselines and provides a conservative operating point in this controlled replay.",
+        "Safe claim: the proposed layer is compared with simple fusion baselines and provides an interpretable no-label operating point in this controlled replay.",
+        "If the Bayesian existence filter dominates the proposed point, report it as the stronger numerical baseline and keep the trust-layer claim to interpretability/noncompensatory semantics.",
         "Forbidden claim: do not call these baselines cooperative perception SOTA and do not claim replacement for CoBEVFusion/V2X-Real.",
     ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

@@ -31,16 +31,16 @@ def main() -> None:
     size = grouped_metrics(det, accept, "size_bin")
     density = grouped_metrics(det, accept, "density_bin")
     conf = grouped_metrics(det, accept, "confidence_bin")
-    motion = grouped_metrics(det, accept, "motion_bin")
+    persistence = grouped_metrics(det, accept, "tracklet_persistence_bin")
     size.to_csv(out / "failure_by_size.csv", index=False)
     density.to_csv(out / "failure_by_density.csv", index=False)
     conf.to_csv(out / "failure_by_confidence.csv", index=False)
-    motion.to_csv(out / "failure_by_motion.csv", index=False)
+    persistence.to_csv(out / "failure_by_tracklet_persistence.csv", index=False)
     plot_delta(size, "size_bin", out / "fig_failure_size_ru.png")
     plot_delta(density, "density_bin", out / "fig_failure_density_ru.png")
     plot_delta(conf, "confidence_bin", out / "fig_failure_confidence_ru.png")
-    plot_delta(motion, "motion_bin", out / "fig_failure_motion_ru.png")
-    write_claim(out / "failure_case_claim_safe.md", size, density, conf, motion)
+    plot_delta(persistence, "tracklet_persistence_bin", out / "fig_failure_tracklet_persistence_ru.png")
+    write_claim(out / "failure_case_claim_safe.md", size, density, conf, persistence)
     print(f"status=ok output={out}")
 
 
@@ -55,9 +55,13 @@ def add_bins(det: pd.DataFrame) -> pd.DataFrame:
     d["density_bin"] = np.where(dens <= dq1, "low_density", np.where(dens <= dq2, "medium_density", "high_density"))
     c = d["confidence"].astype(float)
     d["confidence_bin"] = np.where(c < 0.30, "low_confidence", np.where(c < 0.50, "medium_confidence", "high_confidence"))
-    speed_proxy = d.groupby("tracklet_id")["frame_id"].transform("count").astype(float)
-    sq1, sq2 = speed_proxy.quantile([1 / 3, 2 / 3]).to_list()
-    d["motion_bin"] = np.where(speed_proxy <= sq1, "fast_proxy", np.where(speed_proxy <= sq2, "medium_proxy", "slow_proxy"))
+    tracklet_len = d.groupby("tracklet_id")["frame_id"].transform("count").astype(float)
+    tq1, tq2 = tracklet_len.quantile([1 / 3, 2 / 3]).to_list()
+    d["tracklet_persistence_bin"] = np.where(
+        tracklet_len <= tq1,
+        "short_tracklet",
+        np.where(tracklet_len <= tq2, "medium_tracklet", "long_tracklet"),
+    )
     return d
 
 
@@ -117,7 +121,7 @@ def plot_delta(df: pd.DataFrame, group_col: str, path: Path) -> None:
     plt.close()
 
 
-def write_claim(path: Path, size: pd.DataFrame, density: pd.DataFrame, conf: pd.DataFrame, motion: pd.DataFrame) -> None:
+def write_claim(path: Path, size: pd.DataFrame, density: pd.DataFrame, conf: pd.DataFrame, persistence: pd.DataFrame) -> None:
     def worst(df: pd.DataFrame, col: str) -> str:
         hit = df[df["method"].eq("geometry_dynamic_no_multiagent")].copy()
         if hit.empty:
@@ -131,10 +135,11 @@ def write_claim(path: Path, size: pd.DataFrame, density: pd.DataFrame, conf: pd.
         f"Most negative F1 delta by size: `{worst(size, 'size_bin')}`.",
         f"Most negative F1 delta by confidence: `{worst(conf, 'confidence_bin')}`.",
         f"Most negative F1 delta by density: `{worst(density, 'density_bin')}`.",
-        "Motion analysis: proxy only. Tracklet length is used as a motion/persistence proxy; true FP objects do not have GT motion.",
+        f"Most negative F1 delta by tracklet persistence: `{worst(persistence, 'tracklet_persistence_bin')}`.",
+        "Tracklet persistence is not object speed. It is a diagnostic grouping by candidate tracklet length.",
         "",
         "Safe claim: use these as failure diagnostics, not as formal robustness proof.",
-        "Forbidden claim: do not claim speed robustness from this proxy analysis.",
+        "Forbidden claim: do not claim speed or motion robustness from tracklet-length bins.",
     ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
