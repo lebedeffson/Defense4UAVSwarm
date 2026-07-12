@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pandas as pd
 
-from defense4uavswarm.q1_v5.rf_v21 import FEATURE_COLUMNS, build_episode_feature_table, score_episode_predictions
+from defense4uavswarm.q1_v5.rf_v21 import (
+    FEATURE_COLUMNS,
+    RFBudgetSpec,
+    build_episode_feature_table,
+    score_episode_predictions,
+    simulate_budgeted_interventions,
+)
 
 
 def test_rf_features_use_episode_start_only() -> None:
@@ -41,3 +47,21 @@ def test_score_episode_predictions_rewards_true_retention_and_false_rejection() 
     assert score["true_retention"] == 1.0
     assert score["false_rejection"] == 1.0
     assert score["false_acceptance"] == 0.0
+
+
+def test_budgeted_interventions_need_accumulated_budget() -> None:
+    episodes = pd.DataFrame(
+        {
+            "sequence_id": ["s", "s", "s"],
+            "tracklet_id": ["a", "b", "c"],
+            "episode_id": [0, 0, 0],
+            "first_frame_id": [1, 2, 3],
+        }
+    )
+    decisions = simulate_budgeted_interventions(
+        episodes,
+        [0.9, 0.9, 0.9],
+        RFBudgetSpec(decision_threshold=0.5, intervention_fraction=0.5, budget_capacity=2.0),
+    )
+    assert decisions["intervened"].tolist() == [False, True, False]
+    assert decisions["budget_tokens_before"].tolist() == [0.5, 1.0, 0.5]

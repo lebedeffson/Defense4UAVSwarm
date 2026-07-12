@@ -26,7 +26,9 @@ from defense4uavswarm.q1_v5.rf_v21 import (
     add_episode_labels,
     build_episode_feature_table,
     false_probability,
+    rf_budgeted_gate_result,
     rf_unbounded_gate_result,
+    select_rf_budget_spec_nested,
     select_rf_spec_nested,
     train_random_forest,
 )
@@ -98,6 +100,7 @@ def main() -> None:
     sequences = sorted(det["sequence_id"].unique())
     rows = []
     selected_rows = []
+    selected_budget_rows = []
     threshold_rows = []
     feature_importances = []
     leakage_rows = []
@@ -109,6 +112,12 @@ def main() -> None:
         train_manifest = sequence_slice(manifest, train_seqs)
         episode_train = add_episode_labels(train_det, train_gt, train_ignored, train_manifest, mc, gc)
         selected, selection_frame = select_rf_spec_nested(episode_train, train_seqs, random_state=args.seed + fold_idx)
+        budget_selected, budget_selection_frame = select_rf_budget_spec_nested(
+            episode_train,
+            train_seqs,
+            selected,
+            random_state=args.seed + 10_000 + fold_idx,
+        )
         model = train_random_forest(episode_train, selected, random_state=args.seed + fold_idx)
 
         test_det = det[det["sequence_id"].eq(test_seq)].copy()
@@ -121,7 +130,8 @@ def main() -> None:
 
         baseline_gate = tracker_baseline_gate_result(test_det, gc)
         rf_gate = rf_unbounded_gate_result(test_det, test_episode_features, fp_prob, selected, gc)
-        for method, gate in [("tracker_baseline", baseline_gate), ("rf_unbounded", rf_gate)]:
+        rf_budget_gate = rf_budgeted_gate_result(test_det, test_episode_features, fp_prob, budget_selected, gc)
+        for method, gate in [("tracker_baseline", baseline_gate), ("rf_unbounded", rf_gate), ("rf_budgeted", rf_budget_gate)]:
             row = evaluate_method(test_seq, det, gt, ignored, manifest, gate, mc)
             row.update(
                 {
@@ -130,15 +140,18 @@ def main() -> None:
                     "sequence_id": test_seq,
                     "tracker": cfg.get("tracker", "bytetrack"),
                     "method": method,
-                    "label_access": "supervised_source_label" if method == "rf_unbounded" else "fixed_zero_label",
-                    "selected_parameter_json": rf_gate.parameter_json if method == "rf_unbounded" else "{}",
+                    "label_access": "supervised_source_label" if method.startswith("rf_") else "fixed_zero_label",
+                    "selected_parameter_json": gate.parameter_json if method.startswith("rf_") else "{}",
                 }
             )
             rows.append(row)
         selected_payload = selected.to_params()
         selected_rows.append({"outer_fold": fold_idx, "outer_test_sequence": test_seq, **selected_payload})
+        selected_budget_rows.append({"outer_fold": fold_idx, "outer_test_sequence": test_seq, **budget_selected.to_params()})
         threshold_rows.append({"outer_fold": fold_idx, "outer_test_sequence": test_seq, "method": "rf_unbounded", "decision_threshold": selected.decision_threshold})
+        threshold_rows.append({"outer_fold": fold_idx, "outer_test_sequence": test_seq, "method": "rf_budgeted", "decision_threshold": budget_selected.decision_threshold})
         selection_frame.assign(outer_fold=fold_idx, outer_test_sequence=test_seq).to_csv(out / "predictions" / f"fold_{fold_idx:02d}_inner_selection.csv", index=False)
+        budget_selection_frame.assign(outer_fold=fold_idx, outer_test_sequence=test_seq).to_csv(out / "predictions" / f"fold_{fold_idx:02d}_inner_budget_selection.csv", index=False)
         for name, importance in zip(FEATURE_COLUMNS, getattr(model, "feature_importances_", np.zeros(len(FEATURE_COLUMNS)))):
             feature_importances.append({"outer_fold": fold_idx, "feature": name, "importance": float(importance)})
         leakage_rows.append(
@@ -168,6 +181,7 @@ def main() -> None:
     )
     summary.to_csv(out / "aggregate_results.csv", index=False)
     pd.DataFrame(selected_rows).to_csv(out / "selected_hyperparameters.csv", index=False)
+    pd.DataFrame(selected_budget_rows).to_csv(out / "selected_budget_parameters.csv", index=False)
     pd.DataFrame(threshold_rows).to_csv(out / "selected_thresholds.csv", index=False)
     write_feature_schema(out / "feature_schema.json")
     pd.DataFrame(feature_importances).groupby("feature", as_index=False).agg(importance=("importance", "mean")).sort_values("importance", ascending=False).to_csv(out / "feature_importance.csv", index=False)
@@ -178,6 +192,7 @@ def main() -> None:
         "folds_required": 7,
         "folds_by_method": {k: int(v) for k, v in fold.groupby("method")["outer_fold"].nunique().to_dict().items()},
         "rf_unbounded_complete": int(fold[fold["method"].eq("rf_unbounded")]["outer_fold"].nunique()) == 7,
+        "rf_budgeted_complete": int(fold[fold["method"].eq("rf_budgeted")]["outer_fold"].nunique()) == 7,
         "future_features_detected": False,
         "test_leakage_detected": False,
         "git_commit": git(["rev-parse", "HEAD"]),
@@ -186,7 +201,7 @@ def main() -> None:
     manifest_payload = {
         "status": "success",
         "protocol": "q1_selective_quarantine_v21",
-        "method": "rf_unbounded",
+        "methods": ["rf_unbounded", "rf_budgeted"],
         "config": args.config,
         "git_commit": git(["rev-parse", "HEAD"]),
         "git_branch": git(["branch", "--show-current"]),
