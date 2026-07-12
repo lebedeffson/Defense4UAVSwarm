@@ -89,32 +89,27 @@ def fit_predict(model: str, train: pd.DataFrame, test: pd.DataFrame, return_mode
     x_train, cols = features(train)
     x_test, _ = features(test)
     y_train = (~train["eval_is_tp"].astype(bool)).astype(int).to_numpy()
-    try:
-        if model == "logistic":
-            from sklearn.linear_model import LogisticRegression
-            clf = LogisticRegression(class_weight="balanced", max_iter=1000).fit(x_train, y_train)
-            result = (clf.predict_proba(x_test)[:, 1], dict(zip(cols, np.abs(clf.coef_[0]))), clf)
-            return result if return_model else result[:2]
-        if model == "random_forest":
-            from sklearn.ensemble import RandomForestClassifier
-            clf = RandomForestClassifier(n_estimators=50, class_weight="balanced", random_state=42).fit(x_train, y_train)
-            result = (clf.predict_proba(x_test)[:, 1], dict(zip(cols, clf.feature_importances_)), clf)
-            return result if return_model else result[:2]
-        from sklearn.ensemble import GradientBoostingClassifier
-        clf = GradientBoostingClassifier(random_state=42).fit(x_train, y_train)
+    if model == "logistic":
+        from sklearn.linear_model import LogisticRegression
+
+        clf = LogisticRegression(class_weight="balanced", max_iter=1000).fit(x_train, y_train)
+        result = (clf.predict_proba(x_test)[:, 1], dict(zip(cols, np.abs(clf.coef_[0]))), clf)
+        return result if return_model else result[:2]
+    if model == "random_forest":
+        from sklearn.ensemble import RandomForestClassifier
+
+        clf = RandomForestClassifier(n_estimators=50, class_weight="balanced", random_state=42).fit(x_train, y_train)
         result = (clf.predict_proba(x_test)[:, 1], dict(zip(cols, clf.feature_importances_)), clf)
         return result if return_model else result[:2]
-    except Exception:
-        score = 1.0 - test["s_i"].fillna(1.0).astype(float).to_numpy()
-        clf = {"fallback": "1-s_i"}
-        result = (score, {c: (1.0 if c == "s_i" else 0.0) for c in cols}, clf)
-        return result if return_model else result[:2]
+    from sklearn.ensemble import GradientBoostingClassifier
+
+    clf = GradientBoostingClassifier(random_state=42).fit(x_train, y_train)
+    result = (clf.predict_proba(x_test)[:, 1], dict(zip(cols, clf.feature_importances_)), clf)
+    return result if return_model else result[:2]
 
 
 def predict_score(clf, model: str, frame: pd.DataFrame) -> np.ndarray:
     x, _ = features(frame)
-    if isinstance(clf, dict):
-        return 1.0 - frame["s_i"].fillna(1.0).astype(float).to_numpy()
     return clf.predict_proba(x)[:, 1]
 
 
@@ -131,12 +126,12 @@ def select_tracking_threshold(frame: pd.DataFrame, score: np.ndarray, grid: list
         row["threshold"] = tau
         row["FP_delta_vs_base"] = row["FP"] - base["FP"]
         row["FN_delta_vs_base"] = row["FN"] - base["FN"]
-        row["F1_delta_vs_base"] = row["F1"] - base["F1"]
-        row["score"] = (-row["FP_delta_vs_base"] / max(1, base["FP"])) + row["F1_delta_vs_base"]
-        row["passes_constraints"] = row["FN_delta_vs_base"] <= max(1, base["FN"] * 0.01) and row["F1_delta_vs_base"] >= -0.0005
+        row["candidate_conditional_F1_delta_vs_base"] = row["candidate_conditional_F1"] - base["candidate_conditional_F1"]
+        row["score"] = (-row["FP_delta_vs_base"] / max(1, base["FP"])) + row["candidate_conditional_F1_delta_vs_base"]
+        row["passes_constraints"] = row["FN_delta_vs_base"] <= max(1, base["FN"] * 0.01) and row["candidate_conditional_F1_delta_vs_base"] >= -0.0005
         candidates.append(row)
     valid = [r for r in candidates if r["passes_constraints"]]
-    return sorted(valid or candidates, key=lambda r: (r["passes_constraints"], r["score"], r["F1"]), reverse=True)[0]
+    return sorted(valid or candidates, key=lambda r: (r["passes_constraints"], r["score"], r["candidate_conditional_F1"]), reverse=True)[0]
 
 
 def tracking_metrics(accepted: np.ndarray, y_tp: np.ndarray, expected_gt: int, is_new: np.ndarray) -> dict:
@@ -147,15 +142,24 @@ def tracking_metrics(accepted: np.ndarray, y_tp: np.ndarray, expected_gt: int, i
     recall = tp / max(1, tp + fn)
     f1 = 2 * precision * recall / max(1e-9, precision + recall)
     false_new = int((accepted & is_new & ~y_tp).sum())
-    return {"TP": tp, "FP": fp, "FN": fn, "precision": precision, "recall": recall, "F1": f1, "IDF1": f1, "false_new_tracks": false_new}
+    return {
+        "TP": tp,
+        "FP": fp,
+        "FN": fn,
+        "candidate_conditional_precision": precision,
+        "candidate_conditional_recall": recall,
+        "candidate_conditional_F1": f1,
+        "candidate_conditional_IDF1": f1,
+        "false_new_tracks": false_new,
+    }
 
 
 def threshold_sweep(y: np.ndarray, score: np.ndarray) -> tuple[float, dict]:
     best_t, best, best_f1 = 0.5, {}, -1.0
     for t in np.linspace(0.05, 0.95, 19):
         m = metrics(y, score >= t)
-        if m["F1"] > best_f1:
-            best_t, best, best_f1 = float(t), m, m["F1"]
+        if m["candidate_conditional_F1"] > best_f1:
+            best_t, best, best_f1 = float(t), m, m["candidate_conditional_F1"]
     return best_t, best
 
 
@@ -166,7 +170,17 @@ def metrics(y: np.ndarray, pred: np.ndarray) -> dict:
     precision = tp / max(1, tp + fp)
     recall = tp / max(1, tp + fn)
     f1 = 2 * precision * recall / max(1e-9, precision + recall)
-    return {"TP": tp, "FP": fp, "FN": fn, "precision": precision, "recall": recall, "F1": f1, "FP_delta_vs_S_naive": None, "FN_delta_vs_S_naive": None, "F1_delta_vs_S_naive": None}
+    return {
+        "TP": tp,
+        "FP": fp,
+        "FN": fn,
+        "candidate_conditional_precision": precision,
+        "candidate_conditional_recall": recall,
+        "candidate_conditional_F1": f1,
+        "FP_delta_vs_S_naive": None,
+        "FN_delta_vs_S_naive": None,
+        "candidate_conditional_F1_delta_vs_S_naive": None,
+    }
 
 
 def roc_auc(y: np.ndarray, score: np.ndarray) -> float:

@@ -51,7 +51,8 @@ def main() -> None:
                 if accepted is None:
                     continue
                 source_feat = v9_feat if method.lower() == "s2_v9_selected" else feat
-                row = metric_summary(gt, source_feat, accepted, method, len(gt), frame_count(gt), manifest, runtime_base=0.001)
+                row = metric_summary(gt, source_feat, accepted, method, len(gt), frame_count(gt), manifest, runtime_base=0.0)
+                row.pop("runtime_ms_per_frame", None)
                 row.update(
                     {
                         "method": method,
@@ -161,7 +162,7 @@ def bayesian_logodds(det: pd.DataFrame) -> pd.Series:
 
 
 def summarize(raw: pd.DataFrame) -> pd.DataFrame:
-    metrics = ["TP", "FP", "FN", "F1", "precision", "recall", "false_new_tracks", "false_new_per_100_frames", "map_extra_entries", "extra_messages_due_to_false_tracks", "runtime_ms_per_frame"]
+    metrics = ["TP", "FP", "FN", "F1", "precision", "recall", "false_new_tracks", "false_new_per_100_frames", "map_extra_entries", "extra_messages_due_to_false_tracks"]
     return raw.groupby(["method", "agent_count"], as_index=False)[metrics].mean()
 
 

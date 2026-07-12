@@ -55,7 +55,8 @@ def add_bins(det: pd.DataFrame) -> pd.DataFrame:
     d["density_bin"] = np.where(dens <= dq1, "low_density", np.where(dens <= dq2, "medium_density", "high_density"))
     c = d["confidence"].astype(float)
     d["confidence_bin"] = np.where(c < 0.30, "low_confidence", np.where(c < 0.50, "medium_confidence", "high_confidence"))
-    speed_proxy = d.groupby("tracklet_id")["frame_id"].transform("count").astype(float)
+    tracklet_group = ["sequence_id"] + (["agent_id"] if "agent_id" in d.columns else []) + ["tracklet_id"]
+    speed_proxy = d.groupby(tracklet_group)["frame_id"].transform("nunique").astype(float)
     sq1, sq2 = speed_proxy.quantile([1 / 3, 2 / 3]).to_list()
     d["motion_bin"] = np.where(speed_proxy <= sq1, "fast_proxy", np.where(speed_proxy <= sq2, "medium_proxy", "slow_proxy"))
     return d
@@ -63,13 +64,13 @@ def add_bins(det: pd.DataFrame) -> pd.DataFrame:
 
 def acceptance(det: pd.DataFrame, method: str) -> pd.Series:
     if method == "geometry_dynamic_adaptive_balanced":
-        try:
-            import yaml
+        import yaml
 
-            cfgs = yaml.safe_load(Path("outputs/results/q1_improvement/yolov8s_sweep/selected_configs.yaml").read_text(encoding="utf-8"))
-            return adaptive_geometry_acceptance(det, cfgs["selected_balanced"])
-        except Exception:
-            return method_acceptance(det, "geometry_dynamic_no_multiagent", Q1Params())
+        cfg_path = Path("outputs/results/q1_improvement/yolov8s_sweep/selected_configs.yaml")
+        cfgs = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+        if not isinstance(cfgs, dict) or "selected_balanced" not in cfgs:
+            raise ValueError(f"Missing selected_balanced in adaptive geometry config: {cfg_path}")
+        return adaptive_geometry_acceptance(det, cfgs["selected_balanced"])
     return method_acceptance(det, method, Q1Params())
 
 
@@ -85,12 +86,12 @@ def grouped_metrics(det: pd.DataFrame, accept: dict[str, pd.Series], group_col: 
             row["diagnostic_scope"] = "candidate-level bin; absent GT objects outside detector candidates are not counted"
             rows.append(row)
     df = pd.DataFrame(rows)
-    return add_delta(df, group_col)
+    return rename_candidate_metrics(add_delta(df, group_col))
 
 
 def add_delta(df: pd.DataFrame, group_col: str) -> pd.DataFrame:
     out = df.copy()
-    out["F1_delta_vs_bytetrack"] = pd.NA
+    out["candidate_conditional_F1_delta_vs_bytetrack"] = pd.NA
     out["false_new_delta_vs_bytetrack"] = pd.NA
     for _, g in out.groupby(group_col):
         b = g[g["method"].eq("bytetrack")]
@@ -98,9 +99,20 @@ def add_delta(df: pd.DataFrame, group_col: str) -> pd.DataFrame:
             continue
         base = b.iloc[0]
         idx = g.index
-        out.loc[idx, "F1_delta_vs_bytetrack"] = out.loc[idx, "F1"].astype(float) - float(base["F1"])
+        out.loc[idx, "candidate_conditional_F1_delta_vs_bytetrack"] = out.loc[idx, "F1"].astype(float) - float(base["F1"])
         out.loc[idx, "false_new_delta_vs_bytetrack"] = out.loc[idx, "false_new_tracks"].astype(float) - float(base["false_new_tracks"])
     return out
+
+
+def rename_candidate_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    return df.rename(
+        columns={
+            "precision": "candidate_conditional_precision",
+            "recall": "candidate_conditional_recall",
+            "F1": "candidate_conditional_F1",
+            "IDF1": "candidate_conditional_IDF1",
+        }
+    )
 
 
 def plot_delta(df: pd.DataFrame, group_col: str, path: Path) -> None:
@@ -122,12 +134,13 @@ def write_claim(path: Path, size: pd.DataFrame, density: pd.DataFrame, conf: pd.
         hit = df[df["method"].eq("geometry_dynamic_no_multiagent")].copy()
         if hit.empty:
             return "unavailable"
-        return str(hit.sort_values("F1_delta_vs_bytetrack").iloc[0][col])
+        return str(hit.sort_values("candidate_conditional_F1_delta_vs_bytetrack").iloc[0][col])
 
     lines = [
         "# Failure Case Mining Claim-Safe Notes",
         "",
         "Diagnostics are candidate-level bins from saved VisDrone detections. They do not reassign absent GT objects to bins.",
+        "Tracklet persistence is a post-hoc diagnostic computed from the complete recorded tracklet. It is not an online feature.",
         f"Most negative F1 delta by size: `{worst(size, 'size_bin')}`.",
         f"Most negative F1 delta by confidence: `{worst(conf, 'confidence_bin')}`.",
         f"Most negative F1 delta by density: `{worst(density, 'density_bin')}`.",
