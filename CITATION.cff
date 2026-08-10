@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use this repository, please cite the associated article and this software."
+title: "Defense4UAVSwarm: Interpretable bounded control of track initiation in UAV perception"
+type: software
+authors:
+  - family-names: Trofimov
+    given-names: Yuri V.
+  - family-names: Averkin
+    given-names: Alexey N.
+  - family-names: Shevchenko
+    given-names: Alexey V.
+  - family-names: Kuznetsov
+    given-names: Egor M.
+  - family-names: Lebedev
+    given-names: Alexander D.
+repository-code: "https://github.com/lebedeffson/Defense4UAVSwarm"
+license: MIT
+version: "q1-practical-closure-v7"
+preferred-citation:
+  type: article
+  title: "Interpretable Control of Track Initiation with Predefined Intervention Bounds in Unmanned Aerial Vehicle Perception Systems"
+  authors:
+    - family-names: Trofimov
+      given-names: Yuri V.
+    - family-names: Averkin
+      given-names: Alexey N.
+    - family-names: Shevchenko
+      given-names: Alexey V.
+    - family-names: Kuznetsov
+      given-names: Egor M.
+    - family-names: Lebedev
+      given-names: Alexander D.
+  year: 2026
