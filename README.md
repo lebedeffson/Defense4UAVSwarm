@@ -1,36 +1,42 @@
 # Defense4UAVSwarm
 
-**Interpretable bounded control of track initiation in UAV perception**
+**Interpretable control of track initiation in UAV video tracking.**
 
-A reproducible research project studying whether false track initiations can be
-reduced by briefly delaying low-support new tracks while bounding the amount of
-intervention in advance.
+A false detection does not necessarily disappear after one frame. Once a
+tracker assigns it an identity, the error can persist as a false track and
+propagate to downstream perception or planning modules.
 
-> Can we reduce false track initiations by briefly delaying low-support new
-> tracks while bounding the amount of intervention in advance?
+This project studies a simple question: **can weak new tracks be held back
+briefly without changing the underlying tracker and without allowing the
+intervention itself to grow uncontrolled?**
 
-- **Dataset:** VisDrone
-- **Trackers:** ByteTrack · OC-SORT · SORT
-- **Validation:** 7-sequence external validation
-- **Primary positive result:** ByteTrack
-- **Formal bound audit:** 29,385 prefixes · 0 violations
+The proposed method adds a small decision layer around track initiation. It
+delays only low-support initiation episodes, limits the total intervention
+through an accumulated budget, and records the reason for every decision.
 
-### Кратко
+The method was evaluated on seven VisDrone video sequences with ByteTrack,
+OC-SORT, and SORT. The clearest positive result was obtained with ByteTrack.
 
-Одиночное ложное обнаружение становится существенно опаснее, если алгоритм
-сопровождения присваивает ему идентификатор и продолжает вести его как настоящий
-объект.
+## Main result
 
-Работа проверяет, можно ли ненадолго задерживать только слабо подтверждённые
-новые треки, заранее ограничивая число таких вмешательств и сохраняя объяснение
-каждого решения.
+With ByteTrack, the bounded delay affected 392 of 14,967 track-initiation
+episodes (2.62%). It reduced:
 
-## Why This Research Matters
+- false observations from **46,368 to 45,943** (-425);
+- false initiations from **10,031 to 9,855** (-176).
 
-An isolated detector error becomes more consequential when a tracker assigns it
-an identity and propagates it through time. Raising the detector threshold can
-remove false detections, but may also discard small, distant, or occluded real
-objects.
+F1 remained within the predefined tolerance (0.403972 to 0.404400). The formal
+intervention bound was checked on **29,385 video prefixes**, with **0 violations**.
+
+For OC-SORT and SORT, tracking quality was preserved, but a statistically
+reliable reduction in false observations was not established.
+
+## Why track initiation matters
+
+Raising the detector threshold can suppress false detections, but it can also
+discard small, distant, or partly occluded real objects. The alternative studied
+here is to leave the detector and base tracker unchanged and intervene only at
+the moment when a weak new track would enter the output.
 
 ```mermaid
 flowchart LR
@@ -47,22 +53,15 @@ flowchart LR
 ```
 
 A single-frame detection error becomes more consequential when the tracker
-assigns it an identity and propagates it through subsequent frames. The planning
-module itself was not modelled in this study.
+assigns it an identity and propagates it through subsequent frames.
 
-## Research Question
+## Method
 
-The study asks whether a wrapper around an unchanged base tracker can briefly
-delay only weak new-track episodes, reduce false output, keep F1 within a
-predefined tolerance, and enforce an explicit limit on intervention.
-
-## Proposed Method
-
-The Selective Trust Quarantine v2.1 wrapper estimates support when a track is
-initiated. Sufficiently supported episodes pass immediately. A weak episode is
-delayed only if the accumulated budget permits it; subsequent evidence releases
-the episode or returns control according to the finite delay rule. The method is
-not a permanent rejection rule.
+For each new initiation episode, the wrapper estimates support from information
+available at the current frame. An episode with sufficient support passes
+through normally. A weak episode is delayed only when the accumulated budget
+permits an intervention. Additional observations can release it, while a finite
+delay limit returns control to the base tracker.
 
 ```mermaid
 flowchart TD
@@ -83,35 +82,22 @@ flowchart TD
     L --> M[Support · budget · reason · final status]
 ```
 
-The wrapper does not replace ByteTrack, OC-SORT, or SORT, and it does not use a
-learned classifier.
+The accumulated budget is part of the method rather than a tuning convenience:
+it limits both the number of interventions and the resulting deviation from the
+base tracker output. The rule is not a permanent rejection mechanism and does
+not use a learned classifier.
 
-## Why The Intervention Is Bounded
+Each decision remains inspectable through fields including `sequence_id`,
+`tracklet_id`, `episode_id`, `frame_id`, `support`, `relative_confidence`,
+`accumulated_support`, `budget_tokens_before`, `budget_tokens_after`,
+`decision_status`, and `decision_reason`.
 
-```mermaid
-flowchart LR
-    A[Many uncertain new episodes] --> B[Fixed aggressive rule]
-    B --> C[Potentially many affected real objects]
-    A --> D[Bounded rule]
-    D --> E[Accumulated intervention budget]
-    E --> F[Limited number of interventions]
-    F --> G[Bound on intervention count]
-    F --> H[Bound on output deviation]
-```
+## Evaluation
 
-The budget is not only a performance heuristic. It provides an explicit upper
-bound on how far the wrapper may deviate from the base tracker. The prefix audit
-checks
-
-```text
-D_actual(n) <= L_Q N_Q(n) <= L_Q floor(b_0 + sum_{k=1..n} q_k).
-```
-
-## Experimental Protocol
-
-Seven VisDrone video sequences form seven external iterations. In every fold,
-six sequences are used for parameter selection or RF training and the remaining
-sequence is held out for evaluation. Each sequence is tested exactly once.
+The evaluation uses seven VisDrone video sequences in an external held-out
+protocol. On each iteration, six sequences are available for parameter selection
+or Random Forest training and one sequence is reserved for evaluation. The held-
+out sequence rotates so that every sequence is evaluated once.
 
 ```mermaid
 flowchart LR
@@ -126,130 +112,26 @@ flowchart LR
     H --> I[Aggregate results]
 ```
 
-The held-out sequence is excluded from training, threshold selection, and budget
-tuning. RF is fitted again inside each outer fold. Online features use only
-information available by the decision frame; future frames and final tracklet
-length are prohibited.
+The held-out sequence is not used for training, threshold selection, or budget
+tuning. Random Forest models are fitted again inside each fold. Features for a
+new episode use no future frames or final tracklet information.
 
-## Main Findings
+## Results
 
-The confirmed positive result is tracker-specific: it was obtained for
-ByteTrack. F1 was preserved for OC-SORT and SORT, but a statistically robust
-reduction in false observations was not confirmed for those trackers.
-
-```mermaid
-flowchart TD
-    A[Bounded short-term delay]
-    A --> B[ByteTrack]
-    A --> C[OC-SORT]
-    A --> D[SORT]
-    B --> E[425 fewer false observations]
-    B --> F[176 fewer false initiations]
-    B --> G[392 / 14,967 episodes affected]
-    B --> H[F1 within tolerance]
-    C --> I[Quality preserved]
-    C --> J[Robust false-observation reduction not confirmed]
-    D --> K[Quality preserved]
-    D --> L[Robust false-observation reduction not confirmed]
-    A --> M[29,385-prefix bound audit]
-    M --> N[0 violations]
-```
-
-### Главный результат
-
-Для ByteTrack кратковременная задержка затронула 392 из 14 967 эпизодов
-инициации, сократила число ложных наблюдений на 425 и ложных инициаций на 176,
-сохранив F1 в заданном диапазоне. Для OC-SORT и SORT качество сохранилось, но
-статистически устойчивое снижение ложных наблюдений не подтвердилось.
-
-## Key Numerical Results
-
-| Result | Value |
-| --- | ---: |
-| ByteTrack initiation episodes | 14,967 |
-| Episodes affected | 392 |
-| Intervention share | 2.62% |
-| False observations | 46,368 → 45,943 |
-| False observations removed | 425 |
-| False initiations | 10,031 → 9,855 |
-| False initiations removed | 176 |
-| Initial prefixes audited | 29,385 |
-| Bound violations | 0 |
-| Short-delay mean runtime | 0.901 ms/frame |
-
-| Tracker | Baseline F1 | Short delay F1 | Conclusion |
+| Tracker | Baseline F1 | Delayed F1 | Finding |
 | --- | ---: | ---: | --- |
-| ByteTrack | 0.403972 | 0.404400 | False observations reduced with F1 within tolerance |
-| OC-SORT | 0.392258 | 0.392276 | Quality preserved; robust FP reduction not confirmed |
-| SORT | 0.391946 | 0.391942 | Quality preserved; robust FP reduction not confirmed |
+| ByteTrack | 0.403972 | 0.404400 | False observations reduced |
+| OC-SORT | 0.392258 | 0.392276 | Reduction not statistically confirmed |
+| SORT | 0.391946 | 0.391942 | Reduction not statistically confirmed |
 
-These numbers do not support a claim of a large F1 improvement or a universal
-improvement across trackers. The ByteTrack result is a reduction in false output
-under a small, predefined intervention share while preserving F1.
+A budgeted Random Forest reduced false observations more strongly, but required
+labelled initiation episodes and affected about 4.81% of new tracks. The proposed
+rule does not use a learned classifier and affected about 2.60% on average across
+folds (2.62% globally), while keeping the intervention amount explicitly bounded.
+An unbounded Random Forest was also evaluated, but its intervention scale is not
+directly comparable to the bounded rule.
 
-## Comparison With Learned Baselines
-
-### RF without budget
-
-`rf_unbounded` makes an independent learned decision for every new episode and
-is not symmetric with the bounded method in intervention scale. `rf_budgeted`
-ranks candidates with a Random Forest but applies the same cumulative budget
-principle.
-
-### RF with budget
-
-The budgeted RF met the corresponding quality conditions and reduced false
-observations more strongly in this experiment. It requires labelled training
-episodes, is trained again inside each fold, and affects about 4.81% of initiation
-episodes.
-
-| Property | Bounded short delay | RF budgeted |
-| --- | --- | --- |
-| Learned classifier | No | Yes, trained from labelled episodes |
-| Mean affected share across folds | about 2.60% | about 4.81% |
-| Intervention bound | Explicit | Explicit |
-| False-observation reduction | Smaller | Stronger in this experiment |
-| Mean rule-processing runtime | 0.901 ms/frame | 0.552 ms/frame |
-
-RF budgeted met the quality conditions and reduced false observations more
-strongly, but required labelled training episodes and affected a larger share of
-initiations. The proposed rule's distinction is the absence of a learned
-classifier, the smaller intervention share, the explicit bound, and a directly
-interpretable decision log. It is not claimed to dominate RF on every metric.
-
-## Interpretability And Lifecycle Logs
-
-The online event log records the evidence and budget state behind every decision.
-The implementation uses fields such as:
-
-```text
-sequence_id
-tracklet_id
-episode_id
-frame_id
-support
-relative_confidence
-accumulated_support
-budget_tokens_before
-budget_tokens_after
-decision_status
-decision_reason
-```
-
-The post-hoc lifecycle table additionally records episode duration, distinct
-observed frames, published false rows, temporary hiding, permanent removal,
-decision time, and right censoring. Tracklet persistence is a post-hoc diagnostic
-computed from the complete recorded tracklet; it is not an online feature.
-
-## Formal Bound Audit
-
-```text
-Formal audit:
-29,385 initial prefixes checked
-0 violations
-```
-
-The audit found zero budget-balance, episode-bound, or budget-bound violations.
+The deviation bound was checked over every initial prefix used in the audit:
 
 | Tracker | Active folds | Max D(n) | Max D(n)/(LQ·NQ) | Ratio to budget bound | Violations |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -257,11 +139,9 @@ The audit found zero budget-balance, episode-bound, or budget-bound violations.
 | OC-SORT | 1 | 27 | 1.000 | 0.675 | 0 |
 | SORT | 1 | 27 | 1.000 | 0.659 | 0 |
 
-## Runtime
-
-Runtime was measured after warm-up with `time.perf_counter_ns()` over 30
-repetitions. The measurement covers the rule-processing layer only; detector,
-base tracker, and RF training are excluded.
+Runtime was measured after warm-up over 30 repetitions. These values cover only
+the additional decision layer; detector inference, base tracking, and Random
+Forest training are excluded.
 
 | Method | Runs | Mean ms/frame | Median | p95 |
 | --- | ---: | ---: | ---: | ---: |
@@ -269,143 +149,120 @@ base tracker, and RF training are excluded.
 | RF budgeted | 30 | 0.552 | 0.556 | 0.592 |
 | Short-term delay | 30 | 0.901 | 0.899 | 0.925 |
 
-The bounded rule is slower than RF rule evaluation in this benchmark, while its
-measured additional cost remains below 1 ms/frame. This is not an end-to-end
-real-time-readiness claim.
+## Interpretation
 
-## Research Trajectory
+The result is not a general claim that delayed initiation improves every tracker.
+The statistically supported reduction in false observations was obtained for
+ByteTrack. OC-SORT and SORT retained essentially unchanged F1, but their
+false-observation reductions were not statistically confirmed.
 
-```mermaid
-flowchart LR
-    A[S0 baseline] --> B[S1 adversarial experiments]
-    B --> C[T-norm / S2 diagnostics]
-    C --> D[Tracking-aware analysis]
-    D --> E[New-track suppression]
-    E --> F[Bounded selective control]
-    F --> G[Selective v2.1]
-    G --> H[ByteTrack / OC-SORT / SORT]
-    H --> I[RF comparisons]
-    I --> J[Q1 practical closure]
-    J --> K[Publication-ready main]
-```
+The main contribution is a controlled operating point: a small fraction of weak
+initiations can be delayed without replacing the tracker, while the intervention
+budget and decision log make the wrapper's behaviour explicit. No claim is made
+about fewer route replanning events because a planning module was not part of the
+experiment.
 
-These are successive research stages of one repository, not separate products.
+## Reproducing the study
 
-## Reproducibility
-
-### Full scientific reproduction
-
-Full recomputation requires obtaining VisDrone and the saved detector/tracker
-inputs under their respective licences. Raw VisDrone data is not included in
-this repository. Start from the [official VisDrone repository](https://github.com/VisDrone/VisDrone-Dataset),
-then use the frozen configurations under `configs/q1_v54/` and the runners under
-`scripts/q1_v54/`.
-
-Source code, configurations, evaluation procedures and interpretation-log
-implementation are preserved in the repository. The numerical results reported
-above correspond to the final study described in the associated manuscript.
-
-### Public repository verification
-
-This check validates the tracked publication state and runs the branch-independent
-test suite. It does not run detector inference, tracking experiments, RF training,
-or runtime benchmarks.
+The project requires Python 3.10 or newer. A local development environment can
+be prepared with:
 
 ```bash
-python scripts/verify_publication_state.py --run-tests
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -e .
+pytest -q
 ```
 
-## Repository Structure
+VisDrone is distributed separately and is not included in this repository. See
+the [official VisDrone repository](https://github.com/VisDrone/VisDrone-Dataset)
+for access and licensing information.
+
+The main experiment entry points are:
+
+- [SORT evaluation](scripts/q1_v54/run_sort_v21_experiment.py)
+- [Random Forest evaluation](scripts/q1_v54/run_rf_v21_experiment.py)
+- [held-out parameter selection](scripts/q1_v54/run_nested_loso.py)
+- [tracker comparison](scripts/q1_v54/build_unified_comparison_v7.py)
+- [lifecycle analysis](scripts/q1_v54/build_false_track_lifecycle_v7.py)
+- [intervention-bound audit](scripts/q1_v54/build_prefix_bound_audit_v7.py)
+- [runtime measurement](scripts/q1_v54/benchmark_practical_runtime_v7.py)
+
+Frozen experiment configurations are under [`configs/q1_v54/`](configs/q1_v54/).
+
+## Repository layout
 
 ```text
-configs/          frozen experiment configurations
-src/              research implementation and tracker adapters
-scripts/          experiment, evaluation, audit, and evidence tools
-tests/            automated implementation and verifier tests
-outputs/          tracked historical evidence where explicitly committed
+configs/          experiment configurations
+src/              method implementation and tracker adapters
+scripts/          experiment, evaluation, and analysis entry points
+tests/            automated tests
+docs/             method and dataset notes
 reproducibility/  earlier reproducibility manifests
-docs/             method, dataset, and limitation notes
-```
-
-## How To Verify The Published Code
-
-These checks do not require the raw dataset:
-
-```bash
-python -m pytest -q
-python -m compileall -q -f src scripts tests
-git diff --check
-```
-
-The closure history and preservation tag can be checked with:
-
-```bash
-git merge-base --is-ancestor 06d2870 main
-git rev-parse q1-practical-closure-v7^{}
 ```
 
 ## Publication
 
-**ИНТЕРПРЕТИРУЕМОЕ УПРАВЛЕНИЕ ИНИЦИАЦИЕЙ ТРЕКОВ С ЗАРАНЕЕ ЗАДАННЫМИ
-ГРАНИЦАМИ ВМЕШАТЕЛЬСТВА В СИСТЕМАХ ВОСПРИЯТИЯ БЕСПИЛОТНЫХ ЛЕТАТЕЛЬНЫХ
-АППАРАТОВ**
+**Interpretable Control of Track Initiation with Predefined Intervention Bounds
+in Unmanned Aerial Vehicle Perception Systems**
 
-**INTERPRETABLE CONTROL OF TRACK INITIATION WITH PREDEFINED INTERVENTION BOUNDS
-IN UNMANNED AERIAL VEHICLE PERCEPTION SYSTEMS**
+*Original title:* «Интерпретируемое управление инициацией треков с заранее
+заданными границами вмешательства в системах восприятия беспилотных летательных
+аппаратов»
 
-Authors:
+Yuri V. Trofimov, Alexey N. Averkin, Alexey V. Shevchenko, Egor M. Kuznetsov,
+Alexander D. Lebedev
 
-- Yuri V. Trofimov
-- Alexey N. Averkin
-- Alexey V. Shevchenko
-- Egor M. Kuznetsov
-- Alexander D. Lebedev
+The DOI and publisher link will be added when available.
 
 ## Funding
+
+This research was carried out within the State Assignment of the Ministry of
+Science and Higher Education of the Russian Federation, topic No.
+124112200072-2.
+
+<details>
+<summary>Original Russian funding statement</summary>
 
 Исследование выполнено в рамках государственного задания Министерства науки и
 высшего образования Российской Федерации, тема № 124112200072-2.
 
-This research was carried out within the framework of the State Assignment of
-the Ministry of Science and Higher Education of the Russian Federation, topic
-No. 124112200072-2.
+</details>
 
 ## Limitations
 
-- Validation covers seven VisDrone sequences; independent datasets and cameras
-  are still required.
-- The main statistically confirmed positive result applies to ByteTrack.
-- OC-SORT and SORT preserved F1, but did not show a confirmed reduction in false
-  observations under the adopted criterion.
-- Random Forest baselines require labelled training episodes.
-- Runtime measurements cover rule processing, not the complete perception stack.
-- A real planning module was not modelled, so planning or replanning effects are
-  not established.
-- The study does not claim safety certification, industrial readiness, real-time
-  certification, or universal tracker improvement.
+The evaluation covers seven VisDrone video sequences and should not be
+interpreted as evidence of universal improvement across trackers or camera
+conditions. The statistically supported reduction in false observations was
+obtained for ByteTrack; the corresponding effect was not confirmed for OC-SORT
+or SORT.
+
+The Random Forest baselines use labelled training episodes, while the proposed
+rule does not. Runtime measurements cover the additional decision layer rather
+than the complete detector-tracker pipeline.
+
+The study does not establish deployment safety or performance in a real planning
+system. Evaluation on independent datasets and cameras is still needed.
 
 ## Citation
 
-Use [`CITATION.cff`](CITATION.cff) for repository metadata. Article-specific DOI
-and publication URL fields remain intentionally absent until real identifiers
-exist.
+Citation metadata for the software and associated article is provided in
+[`CITATION.cff`](CITATION.cff).
 
 ## License
 
-Code in this repository is available under the [MIT License](LICENSE). VisDrone
-and other external datasets retain their own terms and are not redistributed
-here.
-
-## Legacy Research Stages
+The source code is available under the [MIT License](LICENSE). VisDrone and other
+external datasets retain their own terms and are not redistributed here.
 
 <details>
-<summary>Earlier research stages: S0/S1/S2, adversarial robustness and T-norm diagnostics</summary>
+<summary>Earlier research in this repository</summary>
 
-The repository originally explored detector robustness, FGSM perturbations,
-T-norm representation diagnostics, pseudo-swarm consistency, and tracking-aware
-suppression. Those experiments formed the research path from which the bounded
-track-initiation study evolved. They remain in Git history and under the legacy
-scripts and documentation for provenance, but they are not the primary
-publication result described above.
+The repository predates the track-initiation study. Earlier experiments covered
+detector robustness, adversarial perturbations, T-norm diagnostics, and
+tracking-aware filtering.
+
+Those stages are preserved in the Git history and codebase, but they are not the
+primary result described in this README.
 
 </details>

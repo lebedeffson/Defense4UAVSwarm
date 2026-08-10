@@ -34,15 +34,15 @@ REQUIRED_FILES = [
 ]
 
 README_REQUIRED = [
-    "Interpretable bounded control of track initiation in UAV perception",
+    "Interpretable control of track initiation in UAV video tracking.",
     "14,967",
     "392",
-    "46,368 → 45,943",
-    "10,031 → 9,855",
+    "46,368 to 45,943",
+    "10,031 to 9,855",
     "29,385",
     "0 violations",
     "124112200072-2",
-    "Quality preserved; robust FP reduction not confirmed",
+    "Reduction not statistically confirmed",
 ]
 
 AUTHORS = [
@@ -76,7 +76,7 @@ def verify_repository(root: Path = REPO_ROOT, run_tests: bool = False) -> dict[s
     citation = (root / "CITATION.cff").read_text(encoding="utf-8") if (root / "CITATION.cff").is_file() else ""
     missing_readme = [value for value in README_REQUIRED if value not in readme]
     record("scientific_status_and_metadata", not missing_readme, ", ".join(missing_readme))
-    record("mermaid_diagrams", readme.count("```mermaid") == 6, str(readme.count("```mermaid")))
+    record("mermaid_diagrams", readme.count("```mermaid") == 3, str(readme.count("```mermaid")))
     record("article_authors_readme", all(author in readme for author in AUTHORS))
     record(
         "article_authors_citation",
