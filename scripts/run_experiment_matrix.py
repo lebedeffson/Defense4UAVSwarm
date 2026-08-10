@@ -6,11 +6,17 @@ import argparse
 from defense4uavswarm.config import load_config
 from defense4uavswarm.matrix import run_experiment_matrix
 from defense4uavswarm.semantic import build_semantic_diagnostics
+from defense4uavswarm.swarm_tnorm import run_swarm_tnorm_smoke
 
 
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--config", default="configs/default.yaml")
+    p.add_argument("--swarm-config", default=None)
+    p.add_argument("--swarm-root", default=None)
+    p.add_argument("--swarm-generation-mode", default=None)
+    p.add_argument("--pseudo-attack-config", default=None)
+    p.add_argument("--pseudo-attack-seed", type=int, default=None)
     p.add_argument("--models", nargs="+", default=["yolov8n", "yolov8s"])
     p.add_argument("--tasks", nargs="+", default=["vid"])
     p.add_argument("--eps", nargs="+", type=float, default=[0.004, 0.008])
@@ -43,6 +49,7 @@ def main() -> None:
     ]
     p.add_argument("--filter-mode", choices=filter_choices, default=None)
     p.add_argument("--filter-modes", nargs="+", choices=filter_choices, default=None)
+    p.add_argument("--t-norms", nargs="+", default=None)
     p.add_argument("--k-variants", nargs="+", choices=["center", "iou", "combined", "gate", "acc", "robust_min"], default=None)
     p.add_argument("--alpha-scales", nargs="+", type=float, default=None)
     p.add_argument("--gamma-assoc", nargs="+", type=float, default=None)
@@ -60,10 +67,34 @@ def main() -> None:
     p.add_argument("--reject-patience", nargs="+", type=int, default=None)
     p.add_argument("--betas", nargs="+", default=None, help="Temporal smoothing betas; use none to include no smoothing.")
     p.add_argument("--use-selected-defense", default=None)
+    p.add_argument("--use-selected-params", default=None)
+    p.add_argument("--sequence-batch-size", type=int, default=None)
+    p.add_argument("--min-free-disk-gb", type=float, default=None)
+    p.add_argument("--max-temp-gb", type=float, default=None)
+    p.add_argument("--cleanup-temp", action="store_true")
     p.add_argument("--semantic-diagnostics", action="store_true")
     p.add_argument("--semantic-features", nargs="+", default=["margin", "augmentation", "temporal"])
+    p.add_argument("--xai-method", choices=["eigencam", "gradcam"], default="eigencam")
+    p.add_argument("--xai-newtrack-only", default=None)
+    p.add_argument("--xai-boundary-margins", nargs="+", type=float, default=None)
+    p.add_argument("--xai-q-triggers", nargs="+", type=float, default=None)
+    p.add_argument("--xai-mins", nargs="+", type=float, default=None)
+    p.add_argument("--xai-floors", nargs="+", type=float, default=None)
+    p.add_argument("--xai-veto-modes", nargs="+", default=None)
+    p.add_argument("--feature-sets", nargs="+", default=None)
+    p.add_argument("--aggregators", nargs="+", default=None)
+    p.add_argument("--calibration-noise-px", nargs="+", type=float, default=None)
+    p.add_argument("--calibration-noise-seed", type=int, default=123)
+    p.add_argument("--calibration-noise-mode", default="sequence_static")
+    p.add_argument("--enable-runtime-profiler", action="store_true")
+    p.add_argument("--runtime-warmup-frames", type=int, default=50)
+    p.add_argument("--runtime-sample-frames", type=int, default=300)
+    p.add_argument("--save-per-sequence-metrics", action="store_true")
+    p.add_argument("--save-per-frame-metrics", action="store_true")
+    p.add_argument("--save-track-events", action="store_true")
+    p.add_argument("--log-file", default=None)
     p.add_argument("--augmentation-count", type=int, default=3)
-    p.add_argument("--semantic-max-frames", type=int, default=30)
+    p.add_argument("--semantic-max-frames", type=int, default=None)
     p.add_argument("--xai-max-per-frame", type=int, default=3)
     p.add_argument("--recovery-modes", nargs="+", default=None)
     p.add_argument("--recovery-horizons", nargs="+", type=int, default=None)
@@ -77,6 +108,16 @@ def main() -> None:
     p.add_argument("--weak-confidence-min", nargs="+", type=float, default=None)
     p.add_argument("--weak-iou-min", nargs="+", type=float, default=None)
     p.add_argument("--recovery-cooldown", nargs="+", type=int, default=None)
+    p.add_argument("--reweight-modes", nargs="+", default=None)
+    p.add_argument("--q-floors", nargs="+", type=float, default=None)
+    p.add_argument("--q-floors-new", nargs="+", type=float, default=None)
+    p.add_argument("--q-floors-existing", nargs="+", type=float, default=None)
+    p.add_argument("--q-new-modes", nargs="+", default=None)
+    p.add_argument("--q-new-mins", nargs="+", type=float, default=None)
+    p.add_argument("--gammas", nargs="+", type=float, default=None)
+    p.add_argument("--q-hard-mins", nargs="+", type=float, default=None)
+    p.add_argument("--new-track-thresholds", nargs="+", type=float, default=None)
+    p.add_argument("--existing-track-thresholds", nargs="+", type=float, default=None)
     args = p.parse_args()
     cfg = load_config(args.config)
     if args.fgsm_loss:
@@ -145,6 +186,59 @@ def main() -> None:
     betas = None
     if args.betas is not None:
         betas = [None if str(x).lower() in {"none", "null", "off"} else float(x) for x in args.betas]
+    if "swarm_vid" in args.tasks:
+        if not args.swarm_config:
+            raise SystemExit("--swarm-config is required for task swarm_vid")
+        run_swarm_tnorm_smoke(
+            args.swarm_config,
+            args.split_config or "configs/vid_split.yaml",
+            args.split or "calibration",
+            args.eps,
+            args.scenarios,
+            args.t_norms or ["min", "prod", "lukasiewicz"],
+            cfg["outputs"]["results_dir"],
+            args.limit_sequences,
+            xai_method=args.xai_method,
+            xai_max_per_frame=args.xai_max_per_frame,
+            semantic_max_frames=args.semantic_max_frames,
+            pseudo_attack_config=args.pseudo_attack_config,
+            pseudo_attack_seed=args.pseudo_attack_seed,
+            swarm_root=args.swarm_root,
+            use_selected_params=args.use_selected_params,
+            sequence_batch_size=args.sequence_batch_size,
+            min_free_disk_gb=args.min_free_disk_gb,
+            max_temp_gb=args.max_temp_gb,
+            cleanup_temp=args.cleanup_temp,
+            xai_newtrack_only=str(args.xai_newtrack_only).lower() == "true" if args.xai_newtrack_only is not None else False,
+            xai_boundary_margins=args.xai_boundary_margins,
+            xai_q_triggers=args.xai_q_triggers,
+            xai_mins=args.xai_mins,
+            xai_floors=args.xai_floors,
+            xai_veto_modes=args.xai_veto_modes,
+            feature_sets=args.feature_sets,
+            aggregators=args.aggregators,
+            calibration_noise_px=args.calibration_noise_px,
+            calibration_noise_seed=args.calibration_noise_seed,
+            calibration_noise_mode=args.calibration_noise_mode,
+            enable_runtime_profiler=args.enable_runtime_profiler,
+            runtime_warmup_frames=args.runtime_warmup_frames,
+            runtime_sample_frames=args.runtime_sample_frames,
+            save_per_sequence_metrics=args.save_per_sequence_metrics,
+            save_per_frame_metrics=args.save_per_frame_metrics,
+            save_track_events=args.save_track_events,
+            log_file=args.log_file,
+            reweight_modes=args.reweight_modes,
+            q_floors=args.q_floors,
+            q_floors_new=args.q_floors_new,
+            q_floors_existing=args.q_floors_existing,
+            q_new_modes=args.q_new_modes,
+            q_new_mins=args.q_new_mins,
+            gammas=args.gammas,
+            q_hard_mins=args.q_hard_mins,
+            new_track_thresholds=args.new_track_thresholds,
+            existing_track_thresholds=args.existing_track_thresholds,
+        )
+        return
     existing_semantic_inputs = (
         args.semantic_diagnostics
         and args.scenarios == ["s1"]

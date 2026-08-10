@@ -1,0 +1,12 @@
+selection_status: selected
+source_stage: v3.0_newtrack_gate_holdout
+selected_scenario: S2_tnorm_soft
+selected_t_norm: min
+selected_reweight_mode: multiplicative_floor
+selected_q_floor: 0.6
+selected_q_hard_min: 0.0
+selected_new_track_threshold: 0.5
+selected_existing_track_threshold: 0.05
+xai_enabled: false
+xai_status: diagnostic_only
+reason: reduces_false_positives_with_minimal_false_negative_increase

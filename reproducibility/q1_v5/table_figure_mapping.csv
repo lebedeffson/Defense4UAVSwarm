@@ -1,0 +1,10 @@
+paper_item,source_script,source_csv,config,output_file
+Table A,scripts/q1_v5/freeze_legacy_baseline.py,outputs/results/q1_v5/legacy_freeze/legacy_baseline_freeze.csv,n/a,legacy tracker freeze
+Table B,scripts/q1_v5/run_matched_point_analysis.py,outputs/results/q1_v5/matched_points/bytetrack/matched_operating_points.csv,configs/q1_v5/visdrone_bytetrack.yaml,matched operating points
+Figure 1,scripts/q1_v5/run_operating_curves.py,outputs/results/q1_v5/operating_curves/bytetrack/operating_points_raw.csv,configs/q1_v5/visdrone_bytetrack.yaml,fig_f1_vs_false_new_bytetrack.png
+Stats,scripts/q1_v5/run_statistical_analysis.py,outputs/results/q1_v5/statistics/bytetrack/statistical_results.csv,configs/q1_v5/visdrone_bytetrack.yaml,statistical_summary.md
+TrustGuard A0-A7,scripts/q1_v5/run_trust_guard_ablation.py,outputs/results/q1_v5/trust_guard_ablation/bytetrack/trust_guard_ablation_summary.csv,configs/q1_v5/trust_guard_v52.yaml,trust_guard_claim_safe.md
+Confidence shift,scripts/q1_v5/run_confidence_shift_eval.py,outputs/results/q1_v5/confidence_shift/bytetrack/confidence_shift_summary.csv,configs/q1_v5/trust_guard_v52.yaml,confidence_shift_claim_safe.md
+Baseline dominance,scripts/q1_v5/run_baseline_dominance_audit.py,outputs/results/q1_v5/baseline_dominance/bytetrack/noninferiority_constrained_best.csv,configs/q1_v5/visdrone_bytetrack.yaml,baseline_dominance_claim_safe.md
+Calibration staleness,scripts/q1_v5/run_calibration_staleness.py,outputs/results/q1_v5/calibration_staleness/calibration_staleness_summary.csv,configs/q1_v5/visdrone_bytetrack.yaml,calibration_staleness_claim_safe.md
+Closure report,scripts/q1_v5/build_methodology_closure_report.py,outputs/results/q1_v5/methodology_closure/methodology_closure_report.md,configs/q1_v5/visdrone_bytetrack.yaml,methodology_closure_checklist.csv

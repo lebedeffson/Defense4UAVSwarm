@@ -1,0 +1,11 @@
+agents:
+  - id: agent_1
+    role: reference
+  - id: agent_2
+    role: neighbor
+  - id: agent_3
+    role: neighbor
+synchronization:
+  mode: same_frame_id
+projection:
+  mode: known_homography_to_reference

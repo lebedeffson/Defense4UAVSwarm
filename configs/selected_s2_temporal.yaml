@@ -1,0 +1,15 @@
+selection_status: tradeoff_selected
+selected_scenario: S2_tnorm_temporal
+source_stage: v6_temporal_replay_calibration
+temporal_window: 3
+temporal_iou_threshold: 0.15
+confirmation_threshold: 0.4
+min_hits_to_confirm: 2
+pending_max_age: 3
+new_track_threshold: 0.5
+adaptive_threshold: false
+dynamic_qfloor: false
+base_method: S2_tnorm_soft
+reason: reduces false new tracks substantially while keeping F1 approximately at S2_tnorm_soft level
+holdout_allowed: true
+xai: diagnostic_only

@@ -1,0 +1,11 @@
+stage: v2.3_xai_smoke
+branch: feature/v2-swarm-tnorm-xai
+dataset_type: pseudo_swarm
+agents: 3
+split: calibration
+smoke_runs:
+  - pseudo_swarm_dataset
+  - inter_agent_consistency
+  - s2_tnorm_no_xai
+  - s3_tnorm_xai
+holdout_run: false

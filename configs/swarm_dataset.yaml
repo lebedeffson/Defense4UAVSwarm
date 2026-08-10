@@ -1,0 +1,6 @@
+dataset_type: pseudo_swarm
+root: data/swarm/pseudo_visdrone
+calibration_split: calibration
+holdout_split: holdout
+metadata_dir: metadata
+reference_agent: agent_1

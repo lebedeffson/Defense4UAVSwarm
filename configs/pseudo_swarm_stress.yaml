@@ -1,0 +1,39 @@
+source_dataset: visdrone_vid
+source_root: data/visdrone
+output_root: data/swarm/pseudo_visdrone_stress
+
+agents:
+  - id: agent_1
+    transform:
+      type: identity
+
+  - id: agent_2
+    transform:
+      type: affine
+      shift_x: 45
+      shift_y: -25
+      scale: 0.95
+      rotate_deg: 2.0
+      brightness_delta: 0.08
+      occlusion_prob: 0.10
+      noise_std: 0.02
+      bbox_jitter: 8.0
+
+  - id: agent_3
+    transform:
+      type: affine
+      shift_x: -50
+      shift_y: 30
+      scale: 1.06
+      rotate_deg: -2.0
+      brightness_delta: -0.08
+      occlusion_prob: 0.10
+      noise_std: 0.02
+      bbox_jitter: 8.0
+
+synchronization:
+  mode: same_frame_id
+
+projection:
+  reference_agent: agent_1
+  use_known_transform: true

@@ -1,0 +1,27 @@
+dataset_root: data/visdrone/VisDrone2019-VID-val
+feature_audit: outputs/results/q1_final_plus/tracker_comparison_yolov8s_external/ocsort_feature_audit.csv
+detector: yolov8s
+tracker: ocsort
+matching_mode: coarse_class
+ignore_policy: exclude_ignored
+iou_threshold: 0.5
+primary_metric: false_new_tracks_per_100_frames
+noninferiority_margins: [0.005, 0.010, 0.015]
+trust:
+  strict:
+    mode: strict
+    active_channels: [confidence, temporal]
+    beta: 0.6
+    acceptance_threshold: 0.5
+    temporal_age_scale: 3.0
+    temporal_floor: 0.0
+  balanced:
+    mode: balanced
+    active_channels: [confidence, temporal]
+    beta: 0.6
+    acceptance_threshold: 0.5
+    temporal_age_scale: 3.0
+    temporal_floor: 0.35
+    recovery_min_age: 2
+    recovery_min_confidence: 0.10
+

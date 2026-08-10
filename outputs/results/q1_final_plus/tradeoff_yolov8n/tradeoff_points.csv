@@ -1,0 +1,15 @@
+label,family,method,threshold,F1,false_new_tracks,source,pareto
+ByteTrack,tracker,bytetrack,,0.3871905845322202,6044.0,main_summary,False
+ByteTrack + geometry trust,trust,geometry_dynamic_no_multiagent,,0.3812352955155778,4250.0,main_summary,False
+ByteTrack + adaptive balanced,trust,geometry_dynamic_adaptive_balanced,,0.3813026146159468,4251.0,main_summary,False
+ByteTrack + false-new-safe,trust,geometry_dynamic_false_new_safe,,0.3801811122408328,4245.0,main_summary,False
+RF,supervised,rf_learned_gate,,0.3876838096198955,3146.0,main_summary,True
+OC-SORT,tracker,none,,0.3707853357819041,1866.0,tracker_summary,True
+OC-SORT + geometry trust,trust,geometry_dynamic_no_multiagent,,0.3593428247384795,1445.0,tracker_summary,True
+conf >= 0.1,confidence_threshold,confidence_threshold_baseline,0.1,0.3890007712743166,9974.0,outputs/results/q1_final_plus/confidence_threshold_baseline_yolov8n/confidence_threshold_summary.csv,True
+conf >= 0.2,confidence_threshold,confidence_threshold_baseline,0.2,0.3544421909322413,3745.0,outputs/results/q1_final_plus/confidence_threshold_baseline_yolov8n/confidence_threshold_summary.csv,False
+conf >= 0.3,confidence_threshold,confidence_threshold_baseline,0.3,0.3020459848614193,1573.0,outputs/results/q1_final_plus/confidence_threshold_baseline_yolov8n/confidence_threshold_summary.csv,False
+conf >= 0.4,confidence_threshold,confidence_threshold_baseline,0.4,0.246038805385114,646.0,outputs/results/q1_final_plus/confidence_threshold_baseline_yolov8n/confidence_threshold_summary.csv,True
+conf >= 0.5,confidence_threshold,confidence_threshold_baseline,0.5,0.1877809353622344,280.0,outputs/results/q1_final_plus/confidence_threshold_baseline_yolov8n/confidence_threshold_summary.csv,True
+conf >= 0.6,confidence_threshold,confidence_threshold_baseline,0.6,0.1290285686276111,97.0,outputs/results/q1_final_plus/confidence_threshold_baseline_yolov8n/confidence_threshold_summary.csv,True
+conf >= 0.7,confidence_threshold,confidence_threshold_baseline,0.7,0.0711536513724298,34.0,outputs/results/q1_final_plus/confidence_threshold_baseline_yolov8n/confidence_threshold_summary.csv,True
