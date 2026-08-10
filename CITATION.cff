@@ -15,7 +15,7 @@ authors:
     given-names: Alexander D.
 repository-code: "https://github.com/lebedeffson/Defense4UAVSwarm"
 license: MIT
-version: "q1-practical-closure-v7"
+version: "bounded-track-initiation-paper-v1"
 preferred-citation:
   type: article
   title: "Interpretable Control of Track Initiation with Predefined Intervention Bounds in Unmanned Aerial Vehicle Perception Systems"
